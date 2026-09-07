@@ -15,6 +15,11 @@ public:
         return particles_;
     };
 
+    // Get box length
+    double getBoxLength() const {
+        return boxLength_;
+    };
+
 private:
     double boxLength_;
     std::vector<Particle> particles_;
