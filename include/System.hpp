@@ -25,7 +25,7 @@ public:
     std::array<double, 3> minimumImageDistance(const Particle& p1, const Particle& p2) const;
 
     // Wrap the position of a particle back into the simulation box
-    void wrapPosition(Particle& p) const;
+    void wrapPosition(std::array<double, 3>& r) const;
 
     // Calculate the total kinetic energy of the system
     double kineticEnergy() const;
