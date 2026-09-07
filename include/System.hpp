@@ -22,7 +22,7 @@ public:
 
 
     // Using PBC, find the minimum image distance between two particles
-    std::array<double, 3> minimumImageDistance(const Particle& p1, const Particle& p2) const;
+    std::array<double, 3> minimumImageDistance(const std::array<double, 3>& ri, const std::array<double, 3>& rj) const;
 
     // Wrap the position of a particle back into the simulation box
     void wrapPosition(std::array<double, 3>& r) const;
