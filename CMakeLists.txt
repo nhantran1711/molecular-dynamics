@@ -11,6 +11,14 @@ endif()
 
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
 
+# Sanitizer builds for CI, e.g. -DMD_SANITIZE=address,undefined or -DMD_SANITIZE=thread.
+# Applied to every target (including GoogleTest), so it must come before any target is defined
+set(MD_SANITIZE "" CACHE STRING "Comma-separated sanitizers to enable (address, undefined, thread)")
+if(MD_SANITIZE)
+    add_compile_options(-fsanitize=${MD_SANITIZE} -fno-omit-frame-pointer -fno-sanitize-recover=all -g)
+    add_link_options(-fsanitize=${MD_SANITIZE})
+endif()
+
 # Simulation engine, shared by the command-line driver and the visualiser
 add_library(md_core STATIC
     src/System.cpp
@@ -57,4 +65,28 @@ if(glfw3_FOUND AND OpenGL_FOUND)
     target_compile_definitions(md_vis PRIVATE GL_SILENCE_DEPRECATION)
 else()
     message(STATUS "GLFW or OpenGL not found, skipping the md_vis visualiser")
+endif()
+
+# Unit tests (GoogleTest is downloaded at configure time). Run with: ctest --test-dir build/release
+option(MD_BUILD_TESTS "Build the unit tests" ON)
+if(MD_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    enable_testing()
+    add_executable(md_tests
+        tests/test_system.cpp
+        tests/test_forcefield.cpp
+        tests/test_neighbourlist.cpp
+        tests/test_dynamics.cpp
+    )
+    target_link_libraries(md_tests PRIVATE md_core GTest::gtest_main)
+
+    include(GoogleTest)
+    gtest_discover_tests(md_tests DISCOVERY_TIMEOUT 60)
 endif()
