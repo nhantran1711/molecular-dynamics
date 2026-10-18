@@ -1,7 +1,10 @@
 # Molecular Dynamics
 
+[![CI](https://github.com/nhantran1711/molecular-dynamics/actions/workflows/ci.yml/badge.svg)](https://github.com/nhantran1711/molecular-dynamics/actions/workflows/ci.yml)
+
 A molecular dynamics engine in C++20 that simulates a Lennard-Jones fluid with Velocity Verlet integration and periodic boundary conditions. Cell lists and Verlet neighbour lists make each step O(N) instead of O(N²), and OpenMP spreads the step across cores. 
-A benchmark suite measures energy conservation, temperature, stability and scaling.
+Results are validated against NIST reference data, and a benchmark suite measures energy conservation,
+temperature stability and scaling.
 
 ![md_vis: 2048 particles of Lennard-Jones liquid, coloured by speed](docs/visualiser.png)
 
@@ -17,12 +20,20 @@ All quantities are in reduced Lennard-Jones units (ε = σ = m = k_B = 1).
 - **OpenMP** parallel force calculation, neighbour list build, integration and reductions
 - **Reproducible results:** bitwise-identical runs at a fixed thread count by default, and at *any* thread
   count with `--deterministic`
-- **SIMD-vectorised force kernel** (`#pragma omp simd`, confirmed with compiler vectorisation reports)
+- **SIMD-vectorised force kernel** (`#pragma omp simd`, confirmed with compiler vectorisation reports), with
+  an optional **mixed-precision** mode (float pair maths, double positions and accumulation)
+- **Hot/cold memory layout:** positions packed per particle for the neighbour gathers, everything else in
+  separate arrays per component, chosen by measuring it against both pure layouts
+- **Validated against NIST** reference data for the Lennard-Jones fluid (energy and virial pressure), with
+  error bars from independent replicas
+- **Bussi stochastic velocity rescaling** thermostat for correct canonical (NVT) sampling
+- **Observables:** virial pressure, radial distribution function g(r), and **extended XYZ trajectories** with
+  stable particle ids (readable by OVITO, VMD and ASE)
 - **Real-time OpenGL visualiser** (`md_vis`): particles drawn as sphere-shaded point sprites coloured by
   speed, with live temperature control to melt or freeze the system
 - Particles **re-sorted by cell** on every list rebuild, so spatial neighbours are neighbours in memory
-- **FCC lattice** initialisation with Maxwell-Boltzmann velocities, and a velocity-rescaling equilibration
-  phase followed by NVE production
+- **FCC lattice** initialisation with Maxwell-Boltzmann velocities, a velocity-rescaling equilibration phase
+  (optionally melting at T = 2 first), then NVE or NVT production
 - A **benchmark suite** (`bench/benchmark.py`) that runs the sweeps below and regenerates every plot
 
 ## Build and run
@@ -38,7 +49,9 @@ cmake --build build/release
 ```
 
 ```
-md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--csv PATH] [--quiet]
+md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--density X]
+       [--temperature X] [--nvt] [--seed N] [--melt] [--csv PATH] [--rdf PATH] [--xyz PATH] [--xyz-every N]
+       [--deterministic] [--mixed] [--quiet]
 ```
 
 | Option | Default | Meaning |
@@ -49,8 +62,15 @@ md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--
 | `--skin` | 0.2 | neighbour list skin |
 | `--cutoff` | 2.5 | interaction cutoff |
 | `--equil` / `--steps` | 2000 / 5000 | equilibration / production steps |
-| `--csv` | – | write per-step energies and temperature |
+| `--density` / `--temperature` | 0.8442 / 0.728 | state point |
+| `--nvt` | off | keep the Bussi thermostat on during production (default production is NVE) |
+| `--melt` | off | spend the first third of equilibration at T = 2, so dense states start from a liquid |
+| `--seed` | 42 | initial velocities and thermostat noise |
+| `--csv` | – | write per-step energies, temperature, pressure and pairs inside the cutoff |
+| `--rdf` | – | write g(r) averaged over production |
+| `--xyz` / `--xyz-every` | – / 100 | write an extended XYZ trajectory every N production steps |
 | `--deterministic` | off | bitwise-identical results for any thread count (costs 6–36%) |
+| `--mixed` | off | float pair maths (4 SIMD lanes), double positions and accumulation |
 | `--quiet` | off | print only the machine-readable `RESULT` line |
 
 Set the thread count with `OMP_NUM_THREADS`.
@@ -79,7 +99,7 @@ renders N frames off-screen, saves the last one and exits.
 ## Testing
 
 ```bash
-ctest --test-dir build/release --output-on-failure     # 29 GoogleTest tests, ~4 s
+ctest --test-dir build/release --output-on-failure     # 37 GoogleTest tests, ~5 s
 ```
 
 The tests cover every component:
@@ -96,13 +116,72 @@ The tests cover every component:
   velocities, run back, and every particle returns to within 10⁻⁸ of its start).
 - **Determinism:** identical state hashes across repeated runs at a fixed thread count, and across 1–8
   threads in deterministic mode.
+- **Observables:** the virial and pair counts agree across all force paths; the Bussi thermostat alone
+  reproduces the canonical mean and variance of the kinetic energy; g(r) of an ideal gas is 1.
+- **Mixed precision** matches the double-precision forces to float accuracy and still conserves energy.
+- **Trajectories:** particle ids survive re-sorting, and line k of every XYZ frame is the same particle.
 
 The tests were checked by deliberately breaking the code: skipping neighbour cells, or flipping the sign of
 the SIMD scatter, makes 6 and 7 tests fail respectively.
 
-CI (GitHub Actions) builds and tests on Linux and macOS, and runs the tests under AddressSanitizer +
-UndefinedBehaviorSanitizer and under ThreadSanitizer (with LLVM's Archer, so OpenMP's own synchronisation is
-understood). For a sanitizer build locally: `-DMD_SANITIZE=address,undefined` or `-DMD_SANITIZE=thread`.
+CI (GitHub Actions) builds and tests on Linux and macOS with warnings as errors (`-DMD_WERROR=ON`), runs the
+tests under AddressSanitizer + UndefinedBehaviorSanitizer and under ThreadSanitizer (with LLVM's Archer, so
+OpenMP's own synchronisation is understood), and checks formatting (`clang-format`, pinned to 23.1.3) and
+static analysis (`clang-tidy`: bug-prone patterns, performance and the clang static analyser). For a sanitizer
+build locally: `-DMD_SANITIZE=address,undefined` or `-DMD_SANITIZE=thread`.
+
+clang-tidy found two real bugs when it was added: `atoi`/`atof` turned bad arguments such as `--steps 12abc`
+into 0 without complaint (now rejected), and a pixel offset in the screenshot code was computed in `int`
+before widening, which overflows for large images.
+
+## Validation against NIST
+
+The engine is checked against the NIST Standard Reference Simulation Website's Lennard-Jones benchmarks
+([NVT Monte Carlo](https://mmlapps.nist.gov/srs/LJ_PURE/mc.htm), N = 500, cutoff 3σ, standard long-range
+corrections, virial pressure). Run it with `python bench/validate.py` (about 25 minutes).
+
+Each state point is 8 independent NVT runs (Bussi thermostat; 50 t* equilibration starting from a lattice
+melted at T = 2, then 100 t* production). Energies are converted to NIST's convention: the shift is removed
+using the number of pairs inside the cutoff, and the standard tail corrections are added.
+
+| T | ρ | U (this engine) | U (NIST) | z | P (this engine) | P (NIST) | z |
+|---|---|---|---|---|---|---|---|
+| 0.85 | 0.776 | −5.5120 ± 0.0009 | −5.5121 ± 0.0005 | 0.1 | −0.0002 ± 0.0048 | 0.0068 ± 0.0018 | −1.4 |
+| 0.85 | 0.780 | −5.5382 ± 0.0013 | −5.5386 ± 0.0007 | 0.2 | 0.0413 ± 0.0076 | 0.0479 ± 0.0032 | −0.8 |
+| 0.85 | 0.820 | −5.7921 ± 0.0013 | −5.7947 ± 0.0006 | 1.8 | 0.5588 ± 0.0074 | 0.5535 ± 0.0041 | 0.6 |
+| 0.85 | 0.860 | −6.0276 ± 0.0011 | −6.0305 ± 0.0024 | 1.1 | 1.2768 ± 0.0060 | 1.2660 ± 0.0136 | 0.7 |
+| 0.85 | 0.900 | −6.2355 ± 0.0015 | −6.2391 ± 0.0053 | 0.7 | 2.2427 ± 0.0083 | 2.2314 ± 0.0272 | 0.4 |
+| 0.90 | 0.776 | −5.4671 ± 0.0015 | −5.4689 ± 0.0004 | 1.2 | 0.2412 ± 0.0076 | 0.2406 ± 0.0027 | 0.1 |
+| 0.90 | 0.780 | −5.4950 ± 0.0013 | −5.4956 ± 0.0008 | 0.4 | 0.2756 ± 0.0078 | 0.2785 ± 0.0030 | −0.4 |
+| 0.90 | 0.820 | −5.7453 ± 0.0009 | −5.7456 ± 0.0008 | 0.3 | 0.8186 ± 0.0042 | 0.8239 ± 0.0029 | −1.0 |
+| 0.90 | 0.860 | −5.9742 ± 0.0011 | −5.9753 ± 0.0006 | 0.9 | 1.5762 ± 0.0062 | 1.5781 ± 0.0033 | −0.3 |
+| 0.90 | 0.900 | −6.1733 ± 0.0015 | −6.1773 ± 0.0016 | 1.9 | 2.5995 ± 0.0087 | 2.5848 ± 0.0095 | 1.1 |
+
+z = (this engine − NIST) / combined standard error. All 20 comparisons have |z| < 2, and χ² = 17.2 for 20
+comparisons, which is what purely statistical differences produce.
+
+![Energy vs density](bench/plots/validation_energy.png)
+![Pressure vs density](bench/plots/validation_pressure.png)
+![Radial distribution function](bench/plots/rdf.png)
+
+**Getting the error bars right took three attempts**, and the first two were wrong in instructive ways:
+
+1. With one run per state point and errors from block averaging, every point came out slightly *above* NIST
+   (z ≈ 2–3 throughout). Two hypotheses for a real bias were tested and ruled out: the timestep (results
+   unchanged from dt = 0.005 to 0.00125) and the potential shift changing which configurations are sampled
+   (reweighting the samples to the unshifted potential moved U by at most 0.0015).
+2. The cause was statistical. The blocking curve never reaches a plateau, so block averaging underestimated
+   the error; the spread of independent replicas is 30–40% larger. And every state point had used the same
+   seed, so they shared thermostat noise and their errors were correlated, which made them all lean the same
+   way. Independent replicas with distinct seeds removed the "bias".
+3. Then at ρ = 0.90 some replicas froze: they started from an FCC lattice near the freezing line and never
+   melted. Melting at T = 2 before cooling to the target fixed it.
+
+![Block averaging](bench/plots/blocking.png)
+
+NIST also publishes NVE molecular dynamics data at T ≈ 0.85. Those values differ from NIST's own Monte Carlo
+data by more than their quoted error bars at several points (most clearly the pressure at ρ = 0.90: 2.544 from
+MD, 2.231 from MC). This engine's results agree with the Monte Carlo data.
 
 ## Benchmarks
 
@@ -119,17 +198,17 @@ python bench/benchmark.py --quick    # smoke test, seconds
 
 | N = 4000 | ms / step | vs all pairs |
 |---|---|---|
-| All pairs, 1 thread | 12.9 | 1× |
-| Neighbour list, 1 thread | 1.49 | **8.7×** |
-| Neighbour list, 4 threads | 0.60 | **21.6×** |
+| All pairs, 1 thread | 12.7 | 1× |
+| Neighbour list, 1 thread | 1.44 | **8.8×** |
+| Neighbour list, 4 threads | 0.58 | **21.7×** |
 
-From 256 to 32,000 particles, the neighbour-list cost grows as about N^1.07.
+From 256 to 32,000 particles, the neighbour-list cost grows as about N^1.08.
 
 ### OpenMP scaling
 
 ![OpenMP strong scaling](bench/plots/thread_scaling.png)
 
-The speedup at 4 threads is 2.5× for N = 4000 and 2.4× for N = 13,500. It levels off beyond 4 threads, as
+The speedup at 4 threads is 2.4× for N = 4000 and 2.7× for N = 13,500. It levels off beyond 4 threads, as
 expected on the M1: `schedule(static)` gives every thread an equal share, so once the slower efficiency cores
 join, the other threads wait for them.
 
@@ -142,10 +221,10 @@ With the thermostat off, total energy stays within about 10⁻⁴ of its startin
 ![Energy fluctuation vs timestep](bench/plots/timestep_error.png)
 
 Velocity Verlet is second order, so the energy error should scale as dt². With a 3.5σ cutoff it does
-(measured slope 1.98). With 2.5σ the slope is 1.69 and the curve flattens at small dt: the force drops
+(measured slope 1.92). With 2.5σ the slope is 1.73 and the curve flattens at small dt: the force drops
 abruptly to zero at the cutoff, and every pair that crosses it adds error that doesn't shrink with dt. Raising
 the cutoff makes that jump about 10× smaller (0.039 → 0.0037), and the excess error disappears. Each point is the mean of 3
-runs, with whiskers showing the spread.
+runs with different seeds, with whiskers showing the spread.
 
 ### Temperature stability
 
@@ -159,8 +238,10 @@ the thermostat is switched off, the temperature fluctuates around the target as 
 
 ![Skin sweep](bench/plots/skin_sweep.png)
 
-A small skin means frequent rebuilds. A large skin means more pairs to check every step. 0.2σ was fastest
-here, and also at N = 13,500 and on a single thread, so it is the default.
+A small skin means frequent rebuilds; a large skin means more pairs to check every step. 0.1σ is clearly too
+small (rebuilds every 3 steps). From 0.2σ to 0.6σ the cost is flat to within about 5%, which is the size of
+run-to-run noise on this machine. An earlier run, before the kernel and layout changes, had 0.2σ ahead by
+12%; it remains the default.
 
 ## Design notes
 
@@ -199,8 +280,37 @@ width for doubles. Measured at N = 4000 on one thread, from builds of identical 
 | Gather / compute / scatter, SIMD on | 1.46 | 1.15× from SIMD, **1.25× total** |
 
 This is far below the 2× ideal: NEON holds only 2 doubles, the gather and scatter stay scalar, and list
-rebuilds and integration aren't vectorised. A struct-of-arrays particle layout would remove the gather and
-scatter copies, and single precision (4 lanes) or AVX-512 on x86 (8 doubles) would give more.
+rebuilds and integration aren't vectorised.
+
+**Memory layout.** Three layouts were measured on the same code: one struct per particle (array of structs),
+one array per component (struct of arrays), and a hot/cold split (positions packed as `x y z pad`, everything
+else one array per component). All three produce bit-identical trajectories, checked with the state hash.
+Timings are medians over runs that rotate the order of the binaries, because on a fanless laptop whichever
+runs first is faster; an unrotated comparison had made the hybrid look 9% slower.
+
+| | N = 4000, 1 thread | N = 4000, 4 threads | N = 32,000, 4 threads |
+|---|---|---|---|
+| Array of structs | 1.000× | 1.000× | 1.000× |
+| Struct of arrays | 0.967× | 0.967× | 0.941× |
+| **Hot/cold split** (used) | **1.012×** | **1.016×** | **1.008×** |
+
+The hot loop is a gather: for each neighbour j it loads x[j], y[j], z[j]. Pure struct of arrays turns that
+into 3 cache lines per neighbour instead of 1, so it is slower even though the integrator now vectorises.
+Packing just the positions keeps the gather to one 32-byte load per neighbour. The effect is small either way:
+the step is mostly compute-bound and a 32,000-particle system fits in the M1's caches.
+
+**Mixed precision.** With `--mixed`, positions, the minimum image and all sums across particles stay double,
+and the separations are narrowed to float for the pair maths. Separations are at most the list radius, so
+float keeps about 7 significant digits of each. The compute loop then vectorises at width 4 instead of 2:
+
+| | double | mixed | max energy drift (double / mixed) |
+|---|---|---|---|
+| N = 4000, 1 thread | 1.445 ms | 1.320 ms (1.09×) | 4.5×10⁻⁵ / 4.1×10⁻⁵ |
+| N = 4000, 4 threads | 0.588 ms | 0.544 ms (1.08×) | 3.2×10⁻⁵ / 4.1×10⁻⁵ |
+| N = 32,000, 4 threads | 4.892 ms | 4.494 ms (1.09×) | 1.5×10⁻⁵ / 1.9×10⁻⁵ |
+
+Energy conservation is unchanged. The step gains only 9% because the compute loop is no longer the whole
+cost: the scalar gather and scatter and the list rebuilds take the same time in both modes.
 
 **Reproducibility.** Every run prints a hash of the final positions and velocities (`state_hash` in the
 `RESULT` line), so two runs can be compared bit for bit. At first, 6 runs at 4 threads gave 4 different final
@@ -237,13 +347,18 @@ shows up as drift.
 
 ```
 include/, src/
-  System          particles, box, periodic boundaries, kinetic energy, temperature
-  Forcefield      Lennard-Jones forces: O(N²) reference and parallel neighbour-list version
+  Particle        plain particle record for setup and I/O
+  System          particle storage (hot/cold layout), stable ids, box, periodic boundaries, kinetic energy
+  Forcefield      Lennard-Jones forces: O(N²) reference, parallel SIMD, deterministic and mixed-precision
+                  neighbour-list versions; virial and pair counts
   CellList        particles binned into cells for neighbour search
   NeighbourList   Verlet list: parallel build, displacement-based rebuild
   Integrator      Velocity Verlet
   Initialisation  FCC lattice, Maxwell-Boltzmann velocities
-  Thermostat      velocity rescaling, used during equilibration only
+  Thermostat      velocity rescaling (equilibration) and Bussi stochastic rescaling (NVT)
+  RadialDistribution  g(r) from neighbour-list pairs
+  Trajectory      extended XYZ output in particle-id order
+  CommandLine.hpp checked number parsing for the command-line drivers
   Parallel.hpp    OpenMP thread helpers with single-thread fallbacks
   main.cpp        command-line driver
 vis/
@@ -251,6 +366,46 @@ vis/
   main.cpp        md_vis window, input and live simulation loop
 tests/              GoogleTest unit tests
 bench/benchmark.py  benchmark runner and plots
-.github/workflows/  CI: Linux + macOS build and test, ASan/UBSan and TSan jobs
+bench/validate.py   validation against NIST reference data
+.github/workflows/  CI: Linux + macOS build and test (-Werror), ASan/UBSan and TSan, clang-format and clang-tidy
 ```
 
+
+## References
+
+**Methods**
+
+- L. Verlet, "Computer 'experiments' on classical fluids. I. Thermodynamical properties of Lennard-Jones
+  molecules", *Phys. Rev.* **159**, 98 (1967). The neighbour list with a skin, and the Verlet integrator.
+- W. C. Swope, H. C. Andersen, P. H. Berens and K. R. Wilson, *J. Chem. Phys.* **76**, 637 (1982). The
+  velocity form of the Verlet integrator.
+- M. P. Allen and D. J. Tildesley, *Computer Simulation of Liquids*, 2nd ed., Oxford University Press (2017).
+  Periodic boundaries and the minimum image convention, cell lists, the truncated-and-shifted potential,
+  long-range (tail) corrections for energy and pressure, the virial pressure, and g(r).
+- D. Frenkel and B. Smit, *Understanding Molecular Simulation*, 2nd ed., Academic Press (2002). Reduced
+  Lennard-Jones units and the standard liquid state point (ρ = 0.8442, T = 0.728).
+- G. Bussi, D. Donadio and M. Parrinello, "Canonical sampling through velocity rescaling", *J. Chem. Phys.*
+  **126**, 014101 (2007). The stochastic velocity-rescaling thermostat (equation A7 of the paper).
+- H. Flyvbjerg and H. G. Petersen, "Error estimates on averages of correlated data", *J. Chem. Phys.* **91**,
+  461 (1989). Block averaging, and why it needs a plateau to be trusted.
+- S. Páll and B. Hess, "A flexible algorithm for calculating pair interactions on SIMD architectures",
+  *Comput. Phys. Commun.* **184**, 2641 (2013). Background for the SIMD kernel, packed positions and mixed
+  precision, as used in GROMACS.
+
+**Reference data**
+
+- NIST Standard Reference Simulation Website, Lennard-Jones fluid benchmarks:
+  [index](https://mmlapps.nist.gov/srs/LJ_PURE/index.htm),
+  [NVT Monte Carlo](https://mmlapps.nist.gov/srs/LJ_PURE/mc.htm) (used for the validation table) and
+  [NVE molecular dynamics](https://mmlapps.nist.gov/srs/LJ_PURE/md.htm).
+
+**Tools and formats**
+
+- [OpenMP API specifications](https://www.openmp.org/specifications/): `parallel for`, `simd`, reductions,
+  and the unspecified order in which reductions combine partial results.
+- [Archer](https://github.com/llvm/llvm-project/tree/main/openmp/tools/archer): LLVM's OpenMP data race
+  detection tool, which lets ThreadSanitizer understand OpenMP synchronisation in CI.
+- [clang-format style options](https://clang.llvm.org/docs/ClangFormatStyleOptions.html) (including
+  `IndentPPDirectives: Leave`) and the [clang-tidy check list](https://clang.llvm.org/extra/clang-tidy/checks/list.html).
+- [GoogleTest](https://github.com/google/googletest): unit test framework.
+- [Extended XYZ](https://github.com/libAtoms/extxyz): trajectory file format.
