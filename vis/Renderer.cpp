@@ -40,20 +40,18 @@ Mat4 lookAt(const std::array<float, 3>& eye, const std::array<float, 3>& target)
     const auto up = cross(right, forward);
 
     return {
-        right[0], up[0], -forward[0], 0.0f,
-        right[1], up[1], -forward[1], 0.0f,
-        right[2], up[2], -forward[2], 0.0f,
-        -dot(right, eye), -dot(up, eye), dot(forward, eye), 1.0f,
+        right[0], up[0], -forward[0], 0.0f, right[1],         up[1],         -forward[1],       0.0f,
+        right[2], up[2], -forward[2], 0.0f, -dot(right, eye), -dot(up, eye), dot(forward, eye), 1.0f,
     };
 }
 
 // Sequential blue ramp, dark to light: slow particles recede into the dark background, fast ones glow
-constexpr std::array<float, 3> slowColour {0x18 / 255.0f, 0x4f / 255.0f, 0x95 / 255.0f};   // #184f95
-constexpr std::array<float, 3> fastColour {0xcd / 255.0f, 0xe2 / 255.0f, 0xfb / 255.0f};   // #cde2fb
-constexpr std::array<float, 3> boxColour {0x6b / 255.0f, 0x6a / 255.0f, 0x66 / 255.0f};    // #6b6a66
-constexpr std::array<float, 3> background {0x1a / 255.0f, 0x1a / 255.0f, 0x19 / 255.0f};   // #1a1a19
+constexpr std::array<float, 3> slowColour {0x18 / 255.0f, 0x4f / 255.0f, 0x95 / 255.0f}; // #184f95
+constexpr std::array<float, 3> fastColour {0xcd / 255.0f, 0xe2 / 255.0f, 0xfb / 255.0f}; // #cde2fb
+constexpr std::array<float, 3> boxColour {0x6b / 255.0f, 0x6a / 255.0f, 0x66 / 255.0f};  // #6b6a66
+constexpr std::array<float, 3> background {0x1a / 255.0f, 0x1a / 255.0f, 0x19 / 255.0f}; // #1a1a19
 
-constexpr float particleRadius = 0.5f;   // sigma / 2, so touching spheres are one sigma apart
+constexpr float particleRadius = 0.5f; // sigma / 2, so touching spheres are one sigma apart
 
 const char* particleVertexShader = R"(
 #version 410 core
@@ -164,7 +162,7 @@ GLuint linkProgram(const char* vertexSource, const char* fragmentSource) {
     return program;
 }
 
-}
+} // namespace
 
 Renderer::Renderer() {
     particleProgram_ = linkProgram(particleVertexShader, particleFragmentShader);
@@ -177,6 +175,8 @@ Renderer::Renderer() {
     glBindBuffer(GL_ARRAY_BUFFER, particleVbo_);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
+    // OpenGL takes the byte offset into the bound buffer as a pointer
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
     glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
@@ -206,16 +206,16 @@ void Renderer::uploadBox(double boxLength) {
     const float l = static_cast<float>(boxLength);
     std::vector<float> lines;
     // Each edge joins two corners that differ in exactly one coordinate
-    for (int a = 0; a < 8; ++a) {
-        for (int axis = 0; axis < 3; ++axis) {
-            int b = a | (1 << axis);
+    for (unsigned a = 0; a < 8; ++a) {
+        for (unsigned axis = 0; axis < 3; ++axis) {
+            unsigned b = a | (1u << axis);
             if (b == a) {
                 continue;
             }
-            for (int corner : {a, b}) {
-                lines.push_back((corner & 1) ? l : 0.0f);
-                lines.push_back((corner & 2) ? l : 0.0f);
-                lines.push_back((corner & 4) ? l : 0.0f);
+            for (unsigned corner : {a, b}) {
+                lines.push_back((corner & 1u) ? l : 0.0f);
+                lines.push_back((corner & 2u) ? l : 0.0f);
+                lines.push_back((corner & 4u) ? l : 0.0f);
             }
         }
     }
@@ -225,28 +225,29 @@ void Renderer::uploadBox(double boxLength) {
 }
 
 void Renderer::draw(const System& system, const Camera& camera, int framebufferWidth, int framebufferHeight,
-    double referenceSpeed) {
+                    double referenceSpeed) {
     if (system.getBoxLength() != boxLength_) {
         uploadBox(system.getBoxLength());
     }
 
     // Pack positions and speeds as floats. Speed maps to [0, 1] with referenceSpeed at the middle
-    const auto& particles = system.getParticles();
-    vertices_.resize(4 * particles.size());
-    for (std::size_t i = 0; i < particles.size(); ++i) {
-        const auto& p = particles[i];
-        const double v = std::sqrt(p.velocity[0] * p.velocity[0] + p.velocity[1] * p.velocity[1] + p.velocity[2] * p.velocity[2]);
-        vertices_[4 * i + 0] = static_cast<float>(p.position[0]);
-        vertices_[4 * i + 1] = static_cast<float>(p.position[1]);
-        vertices_[4 * i + 2] = static_cast<float>(p.position[2]);
+    const std::size_t n = system.size();
+    vertices_.resize(4 * n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto r = system.positionOf(i);
+        const auto u = system.velocityOf(i);
+        const double v = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+        vertices_[4 * i + 0] = static_cast<float>(r[0]);
+        vertices_[4 * i + 1] = static_cast<float>(r[1]);
+        vertices_[4 * i + 2] = static_cast<float>(r[2]);
         vertices_[4 * i + 3] = static_cast<float>(std::clamp(0.5 * v / referenceSpeed, 0.0, 1.0));
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, particleVbo_);
     const auto bytes = static_cast<GLsizeiptr>(vertices_.size() * sizeof(float));
-    if (particles.size() > particleCapacity_) {
+    if (n > particleCapacity_) {
         glBufferData(GL_ARRAY_BUFFER, bytes, vertices_.data(), GL_DYNAMIC_DRAW);
-        particleCapacity_ = particles.size();
+        particleCapacity_ = n;
     } else {
         glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, vertices_.data());
     }
@@ -273,7 +274,7 @@ void Renderer::draw(const System& system, const Camera& camera, int framebufferW
     glUniform3fv(glGetUniformLocation(particleProgram_, "slowColour"), 1, slowColour.data());
     glUniform3fv(glGetUniformLocation(particleProgram_, "fastColour"), 1, fastColour.data());
     glBindVertexArray(particleVao_);
-    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(particles.size()));
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(n));
 
     glUseProgram(boxProgram_);
     glUniformMatrix4fv(glGetUniformLocation(boxProgram_, "view"), 1, GL_FALSE, view.data());

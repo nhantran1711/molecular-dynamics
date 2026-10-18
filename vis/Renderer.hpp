@@ -16,10 +16,10 @@
 // Orbit camera looking at a target point, controlled by yaw/pitch angles and distance
 struct Camera {
     std::array<float, 3> target {0.0f, 0.0f, 0.0f};
-    float yaw {0.6f};        // radians around the vertical axis
-    float pitch {0.4f};      // radians above the horizontal plane
+    float yaw {0.6f};   // radians around the vertical axis
+    float pitch {0.4f}; // radians above the horizontal plane
     float distance {30.0f};
-    float fovY {0.8f};       // vertical field of view, radians
+    float fovY {0.8f}; // vertical field of view, radians
 };
 
 // Draws particles as sphere-shaded point sprites (one vertex per particle) and the simulation box as lines.
@@ -34,7 +34,7 @@ public:
 
     // Draw one frame. Particles are coloured by speed, with referenceSpeed mapped to the middle of the ramp
     void draw(const System& system, const Camera& camera, int framebufferWidth, int framebufferHeight,
-        double referenceSpeed);
+              double referenceSpeed);
 
 private:
     void uploadBox(double boxLength);
