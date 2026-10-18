@@ -32,7 +32,11 @@ void VelocityVerletIntegrator::kickAndDrift(System& system) const {
     const double half_dt = 0.5 * dt_;
 
     // Half kick: update velocities by half a timestep, then drift positions by a full timestep
-    for (auto& particle : system.getParticles()) {
+    auto& particles = system.getParticles();
+
+    #pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        Particle& particle = particles[i];
         for (int k = 0; k < 3; ++k) {
             particle.velocity[k] += half_dt * particle.force[k] / particle.mass;
             particle.position[k] += dt_ * particle.velocity[k];
@@ -45,7 +49,11 @@ void VelocityVerletIntegrator::kick(System& system) const {
     const double half_dt = 0.5 * dt_;
 
     // Half kick: update velocities by half a timestep
-    for (auto& particle : system.getParticles()) {
+    auto& particles = system.getParticles();
+
+    #pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        Particle& particle = particles[i];
         for (int k = 0; k < 3; ++k) {
             particle.velocity[k] += half_dt * particle.force[k] / particle.mass;
         }
