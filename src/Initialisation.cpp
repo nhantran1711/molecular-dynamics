@@ -18,7 +18,6 @@ std::vector<Particle> createFCCLattice(int cellsPerSide, double latticeConstant)
     // Reserve space for the expected number of particles to avoid reallocations
     particles.reserve(4 * cellsPerSide * cellsPerSide * cellsPerSide);
 
-
     // Loop over the unit cells and place the basis atoms
     for (int ix = 0; ix < cellsPerSide; ++ix) {
         for (int iy = 0; iy < cellsPerSide; ++iy) {
@@ -46,29 +45,29 @@ std::vector<Particle> createFCCLattice(int cellsPerSide, double latticeConstant)
 
 // Draw Gaussian velocities, remove net momentum, then rescale to hit the target temperature exactly
 void initializeVelocities(System& system, double temperature, std::uint32_t seed) {
-    
-    // Get a reference to the particles in the system
-    auto& particles = system.getParticles();
+    const std::size_t n = system.size();
+    const auto mass = system.mass();
     std::mt19937 rng(seed);
 
-    // Draw Gaussian velocities for each particle and calculate the total momentum and mass
+    // Draw Gaussian velocities for each particle (particle by particle, x then y then z, so the random sequence
+    // maps to the same velocities whatever the storage layout) and calculate the total momentum and mass
     std::array<double, 3> momentum {0.0, 0.0, 0.0};
     double totalMass = 0.0;
 
-    // Draw Gaussian velocities for each particle and calculate the total momentum and mass
-    for (auto& particle : particles) {
-        std::normal_distribution<double> dist(0.0, std::sqrt(temperature / particle.mass));
+    for (std::size_t i = 0; i < n; ++i) {
+        std::normal_distribution<double> dist(0.0, std::sqrt(temperature / mass[i]));
         for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] = dist(rng);
-            momentum[k] += particle.mass * particle.velocity[k];
+            const double v = dist(rng);
+            system.velocity(k)[i] = v;
+            momentum[k] += mass[i] * v;
         }
-        totalMass += particle.mass;
+        totalMass += mass[i];
     }
 
     // Remove centre-of-mass velocity so the system doesn't drift
-    for (auto& particle : particles) {
-        for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] -= momentum[k] / totalMass;
+    for (int k = 0; k < 3; ++k) {
+        for (double& v : system.velocity(k)) {
+            v -= momentum[k] / totalMass;
         }
     }
 

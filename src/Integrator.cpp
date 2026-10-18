@@ -1,10 +1,11 @@
 #include "Integrator.hpp"
 
-VelocityVerletIntegrator::VelocityVerletIntegrator(double dt) : dt_(dt) {}
+VelocityVerletIntegrator::VelocityVerletIntegrator(double dt) : dt_(dt) {
+}
 
 // Velocity Verlet: half kick, drift, recompute forces, half kick
 double VelocityVerletIntegrator::step(System& system, const LennardJonesForceField& forceField) const {
-    
+
     // Half kick the velocities, then drift and wrap the positions by a full timestep
     kickAndDrift(system);
 
@@ -14,48 +15,57 @@ double VelocityVerletIntegrator::step(System& system, const LennardJonesForceFie
     return potential;
 }
 
-double VelocityVerletIntegrator::step(System& system, const LennardJonesForceField& forceField, NeighbourList& neighbourList) const {
-    
+double VelocityVerletIntegrator::step(System& system, const LennardJonesForceField& forceField,
+                                      NeighbourList& neighbourList) const {
+
     // Half kick the velocities, then drift and wrap the positions by a full timestep
     kickAndDrift(system);
     neighbourList.update(system);
-    
+
     // Compute the forces and potential energy using the neighbour list
     double potential = forceField.computeForces(system, neighbourList);
     kick(system);
-
 
     return potential;
 }
 
 void VelocityVerletIntegrator::kickAndDrift(System& system) const {
     const double half_dt = 0.5 * dt_;
+    const std::size_t n = system.size();
+    const double* m = system.mass().data();
 
-    // Half kick: update velocities by half a timestep, then drift positions by a full timestep
-    auto& particles = system.getParticles();
+    // Half kick: update velocities by half a timestep, then drift positions by a full timestep and wrap them.
+    // One loop per component; positions are packed, so x is read with a stride
+    constexpr std::size_t stride = System::positionStride;
+    double* r = system.packedPositions();
 
-    #pragma omp parallel for schedule(static)
-    for (std::size_t i = 0; i < particles.size(); ++i) {
-        Particle& particle = particles[i];
-        for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] += half_dt * particle.force[k] / particle.mass;
-            particle.position[k] += dt_ * particle.velocity[k];
+    #pragma omp parallel
+    for (int k = 0; k < 3; ++k) {
+        double* v = system.velocity(k).data();
+        const double* f = system.force(k).data();
+
+        #pragma omp for simd schedule(static) nowait
+        for (std::size_t i = 0; i < n; ++i) {
+            v[i] += half_dt * f[i] / m[i];
+            r[stride * i + k] = system.wrapCoordinate(r[stride * i + k] + dt_ * v[i]);
         }
-        system.wrapPosition(particle.position);
     }
 }
 
 void VelocityVerletIntegrator::kick(System& system) const {
     const double half_dt = 0.5 * dt_;
+    const std::size_t n = system.size();
+    const double* m = system.mass().data();
 
     // Half kick: update velocities by half a timestep
-    auto& particles = system.getParticles();
+    #pragma omp parallel
+    for (int k = 0; k < 3; ++k) {
+        double* v = system.velocity(k).data();
+        const double* f = system.force(k).data();
 
-    #pragma omp parallel for schedule(static)
-    for (std::size_t i = 0; i < particles.size(); ++i) {
-        Particle& particle = particles[i];
-        for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] += half_dt * particle.force[k] / particle.mass;
+        #pragma omp for simd schedule(static) nowait
+        for (std::size_t i = 0; i < n; ++i) {
+            v[i] += half_dt * f[i] / m[i];
         }
     }
 }
