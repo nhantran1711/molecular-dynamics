@@ -32,7 +32,7 @@ NeighbourList::NeighbourList(double cutOff, double skin)
       cells_(cutOff + skin) {}
 
 // Rebuild only if a particle has moved more than skin / 2 since the last build. Returns true if rebuilt.
-bool NeighbourList::update(const System& system) {
+bool NeighbourList::update(System& system) {
 
     // Get a reference to the particles in the system
     const auto& particles = system.getParticles();
@@ -78,7 +78,7 @@ void NeighbourList::forEachCandidate(std::size_t i, std::size_t n, bool useCells
 }
 
 // Unconditionally rebuild the list for the current positions
-void NeighbourList::build(const System& system) {
+void NeighbourList::build(System& system) {
     // Beyond half the box a particle could interact with two images of the same neighbour
     if (2.0 * listRadius_ > system.getBoxLength()) {
         throw std::runtime_error("Cutoff + skin must be less than half the box length");
@@ -90,10 +90,13 @@ void NeighbourList::build(const System& system) {
 
     // Build the cell list for the current particle positions
     cells_.build(system);
+
+    // Reorder the particles in the system according to the cell list's sorted order, so that particles in the same cell are contiguous in memory. This improves cache locality and performance when accessing neighbouring particles.
+    system.reorder(cells_.sortedOrder());
+    cells_.build(system);
     const bool useCells = cells_.getCellsPerSide() >= 3;
 
-    // Pass 1 (parallel): find the half list. Each pair is distance-checked once (j > i), and each thread
-    // collects the pairs it finds in its own buffer, so threads never share a push_back
+    // Pass 1 (parallel, with distance checks): find all pairs of particles within the list radius. Each thread keeps its own buffer of half-list pairs (i < j) to avoid races.
     #pragma omp parallel
     {
         // single has an implicit barrier, so every thread sees the resized buffers
@@ -117,8 +120,7 @@ void NeighbourList::build(const System& system) {
         }
     }
 
-    // Pass 2 (serial, no distance checks): expand to the full list. Each half pair i-j puts j in i's
-    // list and i in j's list. Writing both ends would race across threads, but this is only O(pairs)
+    // Pass 2 (serial): convert the half-list of pairs into a full list of neighbours for each particle, in compressed sparse row (CSR) format. This allows for efficient access to the neighbours of each particle.
     offsets_.assign(n + 1, 0);
     for (const auto& pairs : threadPairs_) {
         for (auto [i, j] : pairs) {
