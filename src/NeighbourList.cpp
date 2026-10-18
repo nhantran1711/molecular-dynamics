@@ -20,17 +20,37 @@ bool NeighbourList::update(const System& system) {
         return true;
     }
 
-    // Check if any particle has moved more than skin / 2 since the last build
+    // Check if any particle has moved more than skin / 2 since the last build.
+    // An OR reduction instead of an early return, since OpenMP loops can't break out early
+    bool stale = false;
+
+    #pragma omp parallel for reduction(||:stale) schedule(static)
     for (std::size_t i = 0; i < particles.size(); ++i) {
         // Minimum image, since a particle may have wrapped across the box since the last build
         std::array<double, 3> d = system.minimumImageDistance(particles[i].position, referencePositions_[i]);
-        
-        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > maxDisplacementSquared_) {
-            build(system);
-            return true;
+        stale = stale || (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > maxDisplacementSquared_);
+    }
+
+    if (stale) {
+        build(system);
+    }
+    return stale;
+}
+
+template <typename Visit>
+void NeighbourList::forEachCandidate(std::size_t i, std::size_t n, bool useCells, Visit&& visit) const {
+    if (useCells) {
+        for (int cell : cells_.neighbourCells(cells_.cellOf(i))) {
+            for (std::size_t j : cells_.particlesIn(cell)) {
+                visit(j);
+            }
+        }
+    } else {
+        // Box too small for a 3x3x3 grid, so the 27 cells would overlap: fall back to checking every pair
+        for (std::size_t j = 0; j < n; ++j) {
+            visit(j);
         }
     }
-    return false;
 }
 
 // Unconditionally rebuild the list for the current positions
@@ -48,33 +68,40 @@ void NeighbourList::build(const System& system) {
     cells_.build(system);
     const bool useCells = cells_.getCellsPerSide() >= 3;
 
-    offsets_.assign(n + 1, 0);
-    neighbours_.clear();
-
-    // Lambda function to check if particle j is a neighbour of particle i and add it to the list if so
-    auto tryAdd = [&](std::size_t i, std::size_t j) {
-        std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
-        if (dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2] < listRadiusSquared_) {
-            neighbours_.push_back(j);
+    auto isNeighbour = [&](std::size_t i, std::size_t j) {
+        if (j == i) {
+            return false;
         }
+        std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
+        return dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2] < listRadiusSquared_;
     };
 
+    // Two passes so threads can fill the list in parallel without sharing a push_back:
+    // first count each particle's neighbours, then a prefix sum gives every particle its own slice to write
+    offsets_.assign(n + 1, 0);
+
+    #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < n; ++i) {
-        if (useCells) {
-            for (int cell : cells_.neighbourCells(cells_.cellOf(i))) {
-                for (std::size_t j : cells_.particlesIn(cell)) {
-                    if (j > i) {
-                        tryAdd(i, j);
-                    }
-                }
+        std::size_t count = 0;
+        forEachCandidate(i, n, useCells, [&](std::size_t j) {
+            count += isNeighbour(i, j);
+        });
+        offsets_[i + 1] = count;
+    }
+
+    for (std::size_t i = 0; i < n; ++i) {
+        offsets_[i + 1] += offsets_[i];
+    }
+    neighbours_.resize(offsets_[n]);
+
+    #pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < n; ++i) {
+        std::size_t next = offsets_[i];
+        forEachCandidate(i, n, useCells, [&](std::size_t j) {
+            if (isNeighbour(i, j)) {
+                neighbours_[next++] = j;
             }
-        } else {
-            // Box too small for a 3x3x3 grid, so the 27 cells would overlap: fall back to checking every pair
-            for (std::size_t j = i + 1; j < n; ++j) {
-                tryAdd(i, j);
-            }
-        }
-        offsets_[i + 1] = neighbours_.size();
+        });
     }
 
     referencePositions_.resize(n);
