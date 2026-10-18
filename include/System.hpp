@@ -3,6 +3,7 @@
 #include "Particle.hpp"
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -55,6 +56,9 @@ public:
 
     // Calculate the total kinetic energy of the system
     double kineticEnergy() const;
+
+    // Hash of every position and velocity bit pattern: equal hashes mean bitwise-identical states
+    std::uint64_t stateHash() const;
 
     // Calculate the instantaneous temperature (k_B = 1) from the kinetic energy
     double temperature() const;
