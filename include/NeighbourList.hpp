@@ -19,7 +19,8 @@ public:
     // Unconditionally rebuild the list for the current positions
     void build(const System& system);
 
-    // Half list: neighbours j > i of particle i, so each pair appears exactly once
+    // Full list: every neighbour j != i of particle i, so each pair appears twice (i -> j and j -> i).
+    // Costs double the pair work, but a thread handling particle i only ever writes to particle i.
     std::span<const std::size_t> neighboursOf(std::size_t i) const {
         return {neighbours_.data() + offsets_[i], offsets_[i + 1] - offsets_[i]};
     };
@@ -29,7 +30,7 @@ public:
     };
 
     std::size_t getPairCount() const {
-        return neighbours_.size();
+        return neighbours_.size() / 2;
     };
 
 private:
@@ -41,6 +42,10 @@ private:
     // CSR layout: neighbours of particle i are neighbours_[offsets_[i] .. offsets_[i + 1])
     std::vector<std::size_t> offsets_;
     std::vector<std::size_t> neighbours_;
+
+    // Visit every candidate j within the 27 surrounding cells (or every particle, if the box is too small)
+    template <typename Visit>
+    void forEachCandidate(std::size_t i, std::size_t n, bool useCells, Visit&& visit) const;
 
     // Positions at the last build, used to decide when the list goes stale
     std::vector<std::array<double, 3>> referencePositions_;
