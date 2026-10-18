@@ -49,7 +49,15 @@ def run_md(cells, threads, *flags):
     out = proc.stdout
     line = next(l for l in out.splitlines() if l.startswith("RESULT "))
     result = dict(field.split("=", 1) for field in line.split()[1:])
-    return {k: (v if k == "forces" else float(v)) for k, v in result.items()}
+    return {k: _number_or_text(v) for k, v in result.items()}
+
+
+def _number_or_text(value):
+    """RESULT fields are numbers, except labels such as forces=list and the hex state_hash."""
+    try:
+        return float(value)
+    except ValueError:
+        return value
 
 
 def fastest_of(repeats, cells, threads, *flags):

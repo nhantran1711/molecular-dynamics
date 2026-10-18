@@ -28,6 +28,7 @@ add_library(md_core STATIC
     src/Thermostat.cpp
     src/CellList.cpp
     src/NeighbourList.cpp
+    src/RadialDistribution.cpp
 )
 
 target_include_directories(md_core PUBLIC include)
@@ -85,6 +86,7 @@ if(MD_BUILD_TESTS)
         tests/test_neighbourlist.cpp
         tests/test_dynamics.cpp
         tests/test_determinism.cpp
+        tests/test_observables.cpp
     )
     target_link_libraries(md_tests PRIVATE md_core GTest::gtest_main)
 
