@@ -1,9 +1,10 @@
 #include "System.hpp"
 #include <cmath>
+#include <utility>
 
 // Constructor for the System class
 System::System(std::vector<Particle> particles, double boxLength): 
-    particles_(std::move(particles)), boxLength_(boxLength) {}
+    boxLength_(boxLength), particles_(std::move(particles)) {}
 
 
 // Using PBC, find the minimum image distance between two particles
@@ -35,4 +36,10 @@ double System::kineticEnergy() const {
         kinetic += 0.5 * particle.mass * v2;
     }
     return kinetic;
+}
+
+// Temperature from equipartition: KE = (dof / 2) * T, with 3 dof removed for zero total momentum
+double System::temperature() const {
+    double dof = 3.0 * static_cast<double>(particles_.size()) - 3.0;
+    return 2.0 * kineticEnergy() / dof;
 }
