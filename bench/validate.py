@@ -8,10 +8,14 @@ Reference data: https://mmlapps.nist.gov/srs/LJ_PURE/md.htm (NVE MD) and .../mc.
 Both use N = 500, a 3 sigma cutoff, standard long-range corrections, and the virial pressure. The MD runs
 also use Velocity Verlet with dt = 0.005, like this engine.
 
-Which comparison is like for like: a constant shift of the potential does not change forces, so MD with a
-truncated potential (NIST MD) and MD with a truncated-and-shifted one (this engine) follow the same dynamics
-and sample the same configurations. Monte Carlo with the truncated, unshifted potential weights
-configurations very slightly differently, so a small systematic offset from the MC data is expected.
+The primary reference is the NIST Monte Carlo data: it is at exactly T = 0.85 and 0.90, like these NVT runs.
+The NIST MD data is listed for context; at several points it differs from the NIST MC data by more than the
+quoted error bars, and these results agree with the MC data.
+
+Method: 8 independent replicas per state point, each with its own seed, started from a lattice melted at
+T = 2 and cooled to the target. Error bars are the standard error of the replica means. Block averaging of a
+single run underestimates the error here (see blocking.png), and sharing one seed across state points
+correlates their errors.
 """
 
 import argparse
@@ -24,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from benchmark import (  # noqa: E402
-    BINARY, GRID, RESULTS, SERIES, SURFACE, TEXT_SECONDARY, figure, read_rows, save, style, write_rows,
+    BINARY, RESULTS, SERIES, SURFACE, TEXT_SECONDARY, figure, read_rows, save, style, write_rows,
 )
 
 CUTOFF = 3.0
@@ -32,7 +36,6 @@ DT = 0.005
 EQUIL_STEPS = 10000        # 50 time units, as NIST
 PROD_STEPS = 20000         # 100 time units, as NIST
 REPLICAS = 8               # independent runs per state point; error bars come from their spread
-BLOCK_TIME = 4.0           # block length for the blocking plot, in LJ time units (NIST used 2-4)
 
 # NIST NVE MD (T is their measured mean): (T, rho, U per particle, sigma U, P, sigma P)
 NIST_MD = [
@@ -97,7 +100,7 @@ def run_state(temperature, rho, state_index):
     procs = []
     for r in range(REPLICAS):
         cmd = [str(BINARY), "5", "--quiet", "--density", str(rho), "--temperature", str(temperature),
-               "--cutoff", str(CUTOFF), "--dt", str(DT), "--nvt", "--seed", str(1000 * state_index + r + 1),
+               "--cutoff", str(CUTOFF), "--dt", str(DT), "--nvt", "--melt", "--seed", str(1000 * state_index + r + 1),
                "--equil", str(EQUIL_STEPS), "--steps", str(PROD_STEPS), "--csv", str(run_path(temperature, rho, r))]
         if r == 0:
             cmd += ["--rdf", str(rdf_path(temperature, rho))]
@@ -150,17 +153,21 @@ def compare(reference, label):
 # ---------------------------------------------------------------- plots
 
 def plot_eos(rows):
-    md = [r for r in rows if r["reference"] == "NIST MD"]
+    """U and P against density, this engine (filled, joined) and NIST MC (hollow squares), one colour per T"""
+    mc = [r for r in rows if r["reference"] == "NIST MC"]
     for key, ylabel, name in (("U", "U per particle (LJ units)", "validation_energy.png"),
                               ("P", "pressure (LJ units)", "validation_pressure.png")):
         fig, ax = figure()
-        rho = [r["rho"] for r in md]
-        ax.errorbar(rho, [r[f"{key}_nist"] for r in md], yerr=[r[f"{key}_nist_err"] for r in md], color=SERIES[1],
-                    linestyle="none", marker="s", markersize=9, markerfacecolor="none", markeredgewidth=1.5,
-                    capsize=3, label="NIST MD (NVE, T ≈ 0.85)")
-        ax.errorbar(rho, [r[key] for r in md], yerr=[r[f"{key}_err"] for r in md], color=SERIES[0], linewidth=2,
-                    marker="o", markersize=5, capsize=3, label="this engine (NVT, same T)")
-        style(ax, f"{'Energy' if key == 'U' else 'Pressure'} vs density, N = 500, r_c = 3σ", "density ρ", ylabel)
+        for t, color in ((0.85, SERIES[0]), (0.90, SERIES[1])):
+            pts = sorted((r["rho"], r[key], r[f"{key}_err"], r[f"{key}_nist"], r[f"{key}_nist_err"])
+                         for r in mc if r["T"] == t)
+            rho = [p[0] for p in pts]
+            ax.errorbar(rho, [p[3] for p in pts], yerr=[p[4] for p in pts], color=color, linestyle="none",
+                        marker="s", markersize=10, markerfacecolor="none", markeredgewidth=1.5, capsize=3,
+                        label=f"NIST MC, T = {t:.2f}")
+            ax.errorbar(rho, [p[1] for p in pts], yerr=[p[2] for p in pts], color=color, linewidth=2,
+                        marker="o", markersize=5, capsize=3, label=f"this engine, T = {t:.2f}")
+        style(ax, f"{'Energy' if key == 'U' else 'Pressure'} vs density (N = 500, r_c = 3σ)", "density ρ", ylabel)
         ax.legend(frameon=False, labelcolor=TEXT_SECONDARY, loc="upper left" if key == "P" else "upper right")
         save(fig, name)
 
@@ -197,7 +204,7 @@ def plot_blocking():
     ax.set_ylim(0, None)
     style(ax, "Block averaging, T = 0.85, ρ = 0.82 (one run)", "block length (LJ time, log)",
           "error estimate / largest-block estimate")
-    ax.legend(frameon=False, labelcolor=TEXT_SECONDARY, loc="upper left")
+    ax.legend(frameon=False, labelcolor=TEXT_SECONDARY, loc="lower right")
     save(fig, "blocking.png")
 
 
