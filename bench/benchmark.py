@@ -114,6 +114,60 @@ def run_sizes(quick, repeats):
     write_rows(RESULTS / "size_scaling.csv", rows)
 
 
+TIMESTEPS = [0.001, 0.002, 0.003, 0.004, 0.005, 0.007, 0.01]
+
+
+TIMESTEP_CUTOFFS = [2.5, 3.5]
+
+
+def relative_rms_energy(path):
+    energies = [r["e_per_particle"] for r in read_rows(path) if r["phase"] == "production"]
+    mean = sum(energies) / len(energies)
+    return (sum((e - mean) ** 2 for e in energies) / len(energies)) ** 0.5 / abs(mean)
+
+
+def run_timestep(quick, repeats):
+    """Energy fluctuation vs dt at fixed physical time: Velocity Verlet is second order, so it should scale as dt^2.
+
+    Two cutoffs, because the force jumps to zero at the cutoff and adds error that doesn't scale as dt^2; a
+    larger cutoff shrinks that jump. Each point is the mean of several runs: OpenMP reductions sum in a
+    different order every run, so trajectories (and a single run's RMS) differ run to run.
+    """
+    dts = TIMESTEPS[::2] if quick else TIMESTEPS
+    equil_time, prod_time = (2.0, 5.0) if quick else (10.0, 20.0)
+    rows = []
+    for cutoff in TIMESTEP_CUTOFFS:
+        for dt in dts:
+            path = RESULTS / f"timestep_rc{cutoff}_dt{dt}.csv"
+            samples = []
+            for _ in range(repeats):
+                run_md(5, 4, "--cutoff", cutoff, "--dt", dt, "--equil", round(equil_time / dt),
+                       "--steps", round(prod_time / dt), "--csv", path)
+                samples.append(relative_rms_energy(path))
+            mean = sum(samples) / len(samples)
+            print(f"  timestep: rc={cutoff} dt={dt} rms(E)/|E| = {mean:.3e} "
+                  f"(runs: {', '.join(f'{x:.2e}' for x in samples)})")
+            rows.append({"cutoff": cutoff, "dt": dt, "relative_rms_energy": mean,
+                         "min": min(samples), "max": max(samples)})
+    write_rows(RESULTS / "timestep_error.csv", rows)
+
+
+SKINS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+
+
+def run_skin(quick, repeats):
+    """Neighbour list skin: small skins rebuild often, large skins carry more pairs through every force step."""
+    skins = SKINS[::2] if quick else SKINS
+    equil, steps = (100, 200) if quick else (200, 1000)
+    rows = []
+    for skin in skins:
+        r = fastest_of(repeats, 10, 4, "--skin", skin, "--equil", equil, "--steps", steps)
+        steps_per_rebuild = (equil + steps) / r["rebuilds"]
+        print(f"  skin: {skin} {r['ms_per_step']:.3f} ms/step, rebuild every {steps_per_rebuild:.1f} steps")
+        rows.append({"skin": skin, "ms_per_step": r["ms_per_step"], "steps_per_rebuild": steps_per_rebuild})
+    write_rows(RESULTS / "skin_sweep.csv", rows)
+
+
 # ---------------------------------------------------------------- plotting
 
 def style(ax, title, xlabel, ylabel):
@@ -217,12 +271,69 @@ def plot_sizes():
     save(fig, "size_scaling.png")
 
 
+def plot_timestep():
+    rows = read_rows(RESULTS / "timestep_error.csv")
+    fig, ax = figure()
+
+    for cutoff, color in zip(TIMESTEP_CUTOFFS, SERIES):
+        pts = sorted((r["dt"], r["relative_rms_energy"], r["min"], r["max"]) for r in rows if r["cutoff"] == cutoff)
+        dts = [p[0] for p in pts]
+        # Whiskers show the spread across repeated runs
+        ax.vlines(dts, [p[2] for p in pts], [p[3] for p in pts], color=color, linewidth=1, alpha=0.6)
+        ax.plot(dts, [p[1] for p in pts], color=color, linewidth=2, marker="o", markersize=6,
+                markeredgecolor=SURFACE, markeredgewidth=1.5, label=f"cutoff {cutoff:g}σ")
+
+    # Reference slope-2 line through the largest cutoff's middle point: parallel to the data means error ∝ dt²
+    ref_pts = sorted((r["dt"], r["relative_rms_energy"]) for r in rows if r["cutoff"] == TIMESTEP_CUTOFFS[-1])
+    dts = [p[0] for p in ref_pts]
+    mid_dt, mid_err = ref_pts[len(ref_pts) // 2]
+    ref = [mid_err * (dt / mid_dt) ** 2 for dt in dts]
+    ax.plot(dts, ref, color=TEXT_SECONDARY, linewidth=1, linestyle=(0, (4, 3)), label="∝ dt²")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    plain = FuncFormatter(lambda v, _: f"{v:g}")
+    ax.set_xticks(dts)
+    ax.xaxis.set_major_formatter(plain)
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    style(ax, "Energy fluctuation vs timestep (N = 500)", "timestep dt (log)", "RMS(E) / |E|  (log)")
+    ax.legend(frameon=False, labelcolor=TEXT_SECONDARY, loc="upper left")
+    save(fig, "timestep_error.png")
+
+
+def plot_skin():
+    rows = read_rows(RESULTS / "skin_sweep.csv")
+    skins = [r["skin"] for r in rows]
+    ms = [r["ms_per_step"] for r in rows]
+    fig, ax = figure()
+    ax.plot(skins, ms, color=SERIES[0], linewidth=2, marker="o", markersize=6,
+            markeredgecolor=SURFACE, markeredgewidth=1.5)
+
+    # Label the fastest point and the two ends with how often the list was rebuilt
+    best = min(range(len(rows)), key=lambda i: ms[i])
+    for i in sorted({0, best, len(rows) - 1}):
+        text = f"rebuild every {rows[i]['steps_per_rebuild']:.1f} steps"
+        if i == best:
+            text = f"fastest: skin {skins[i]:g}\n{text}"
+        # The minimum sits in a valley, so its label goes below the point to stay clear of the line
+        offset, va = ((0, -14), "top") if i == best else ((0, 12), "bottom")
+        # End labels anchor inward so they don't run into the axis or off the plot
+        ha = "center" if i == best else ("left" if i == 0 else "right")
+        ax.annotate(text, (skins[i], ms[i]), xytext=offset, textcoords="offset points", ha=ha, va=va,
+                    fontsize=9, color=TEXT_SECONDARY)
+    ax.set_ylim(0, max(ms) * 1.3)
+    style(ax, "Neighbour list skin vs cost (N = 4000, 4 threads)", "skin (σ)", "ms per step")
+    save(fig, "skin_sweep.png")
+
+
 # ---------------------------------------------------------------- entry point
 
 BENCHMARKS = {
     "energy": (run_energy, plot_energy),
     "threads": (run_threads, plot_threads),
     "sizes": (run_sizes, plot_sizes),
+    "timestep": (run_timestep, plot_timestep),
+    "skin": (run_skin, plot_skin),
 }
 
 
