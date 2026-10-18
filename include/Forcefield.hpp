@@ -30,6 +30,10 @@ private:
     // Check that the cutoff is less than half the box length, throwing an exception if not
     void checkCutOff(const System& system) const;
 
+    // One force array per thread for the neighbour list loop, summed at the end. Kept between calls to
+    // avoid reallocating, which also means computeForces must not run concurrently on one force field
+    mutable std::vector<std::array<double, 3>> threadForces_;
+
     double epsilon_;
     double sigma_;
     double cut_off_;

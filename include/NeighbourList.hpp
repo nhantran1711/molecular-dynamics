@@ -5,7 +5,6 @@
 #include <array>
 #include <cstddef>
 #include <span>
-#include <utility>
 #include <vector>
 
 // A neighbour list for efficient force computation. 
@@ -21,8 +20,7 @@ public:
     // so particle indices change on every rebuild
     void build(System& system);
 
-    // Full list: every neighbour j != i of particle i, so each pair appears twice (i -> j and j -> i).
-    // Costs double the pair work, but a thread handling particle i only ever writes to particle i.
+    // Half list: neighbours j > i of particle i, so each pair appears exactly once
     std::span<const std::size_t> neighboursOf(std::size_t i) const {
         return {neighbours_.data() + offsets_[i], offsets_[i + 1] - offsets_[i]};
     };
@@ -32,7 +30,7 @@ public:
     };
 
     std::size_t getPairCount() const {
-        return neighbours_.size() / 2;
+        return neighbours_.size();
     };
 
 private:
@@ -49,9 +47,8 @@ private:
     template <typename Visit>
     void forEachCandidate(std::size_t i, std::size_t n, bool useCells, Visit&& visit) const;
 
-    // Per-thread buffers of half-list pairs (i < j), kept between builds to avoid reallocating
-    std::vector<std::vector<std::pair<std::size_t, std::size_t>>> threadPairs_;
-    std::vector<std::size_t> fill_;
+    // Per-thread buffers of neighbour indices, kept between builds to avoid reallocating
+    std::vector<std::vector<std::size_t>> threadNeighbours_;
 
     // Positions at the last build, used to decide when the list goes stale
     std::vector<std::array<double, 3>> referencePositions_;
