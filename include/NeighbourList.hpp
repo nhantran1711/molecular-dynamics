@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <utility>
 #include <vector>
 
 // A neighbour list for efficient force computation. 
@@ -46,6 +47,10 @@ private:
     // Visit every candidate j within the 27 surrounding cells (or every particle, if the box is too small)
     template <typename Visit>
     void forEachCandidate(std::size_t i, std::size_t n, bool useCells, Visit&& visit) const;
+
+    // Per-thread buffers of half-list pairs (i < j), kept between builds to avoid reallocating
+    std::vector<std::vector<std::pair<std::size_t, std::size_t>>> threadPairs_;
+    std::vector<std::size_t> fill_;
 
     // Positions at the last build, used to decide when the list goes stale
     std::vector<std::array<double, 3>> referencePositions_;
