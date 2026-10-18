@@ -23,6 +23,8 @@ struct Options {
     int cellsPerSide = 5;              // 4 * 5^3 = 500 particles
     bool useNeighbourList = true;      // --brute switches to the O(N^2) all-pairs force loop
     double dt = 0.005;
+    double skin = 0.2;                 // neighbour list buffer beyond the cutoff (fastest in bench/ skin sweep)
+    double cutOff = 2.5;               // Lennard-Jones interaction cutoff
     int equilibrationSteps = 2000;
     int productionSteps = 5000;
     const char* csvPath = nullptr;     // per-step energies and temperature, for plotting
@@ -31,7 +33,7 @@ struct Options {
 
 void printUsage() {
     std::fprintf(stderr,
-        "Usage: md_sim [cellsPerSide] [--brute] [--dt X] [--equil N] [--steps N] [--csv PATH] [--quiet]\n");
+        "Usage: md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--csv PATH] [--quiet]\n");
 }
 
 // Parse command line arguments, returning false on anything unrecognised
@@ -46,6 +48,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.quiet = true;
         } else if (arg == "--dt" && hasValue) {
             options.dt = std::atof(argv[++a]);
+        } else if (arg == "--skin" && hasValue) {
+            options.skin = std::atof(argv[++a]);
+        } else if (arg == "--cutoff" && hasValue) {
+            options.cutOff = std::atof(argv[++a]);
         } else if (arg == "--equil" && hasValue) {
             options.equilibrationSteps = std::atoi(argv[++a]);
         } else if (arg == "--steps" && hasValue) {
@@ -58,7 +64,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
             return false;
         }
     }
-    return options.cellsPerSide > 0 && options.dt > 0.0 && options.productionSteps > 0 && options.equilibrationSteps >= 0;
+    return options.cellsPerSide > 0 && options.dt > 0.0 && options.skin > 0.0 && options.cutOff > 0.0 && options.productionSteps > 0 && options.equilibrationSteps >= 0;
 }
 
 }
@@ -77,8 +83,8 @@ int main(int argc, char** argv) {
 
     const double density = 0.8442;       // Liquid argon near the triple point
     const double temperature = 0.728;
-    const double cutOff = 2.5;
-    const double skin = 0.3;
+    const double cutOff = options.cutOff;
+    const double skin = options.skin;
     const double dt = options.dt;
     const int equilibrationSteps = options.equilibrationSteps;
     const int rescaleEvery = 10;
@@ -222,8 +228,8 @@ int main(int argc, char** argv) {
     }
 
     // Machine-readable summary for the benchmark scripts
-    std::printf("RESULT n=%zu threads=%d forces=%s dt=%g steps=%d seconds=%.6f ms_per_step=%.6f mean_T=%.6f std_T=%.6f max_drift=%.6e\n",
+    std::printf("RESULT n=%zu threads=%d forces=%s dt=%g steps=%d seconds=%.6f ms_per_step=%.6f mean_T=%.6f std_T=%.6f max_drift=%.6e skin=%g cutoff=%g rebuilds=%d\n",
         system.getParticles().size(), threads, useNeighbourList ? "list" : "brute", dt, productionSteps,
-        seconds, 1000.0 * seconds / productionSteps, meanT, stdT, maxDrift);
+        seconds, 1000.0 * seconds / productionSteps, meanT, stdT, maxDrift, skin, cutOff, neighbourList.getRebuildCount());
     return 0;
 }
