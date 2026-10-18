@@ -6,3 +6,5 @@ bench/results/
 
 
 __pycache__
+
+.venv/

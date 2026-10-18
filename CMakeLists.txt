@@ -75,13 +75,18 @@ else()
     message(STATUS "GLFW or OpenGL not found, skipping the md_vis visualiser")
 endif()
 
-# Unit tests (GoogleTest is downloaded at configure time). Run with: ctest --test-dir build/release
+# Unit tests (GoogleTest is downloaded at configure time). Run from the build directory with: ctest
 option(MD_BUILD_TESTS "Build the unit tests" ON)
 if(MD_BUILD_TESTS)
     include(FetchContent)
+    # DOWNLOAD_EXTRACT_TIMESTAMP only exists from CMake 3.24; it silences a warning there
+    set(MD_GTEST_TIMESTAMP "")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        set(MD_GTEST_TIMESTAMP DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
     FetchContent_Declare(googletest
         URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        ${MD_GTEST_TIMESTAMP})
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
     set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)

@@ -261,15 +261,88 @@ $\Delta t^2$: a straight line of slope 2 on log-log axes. The timestep benchmark
 
 ## Build and run
 
-Requires CMake ≥ 3.16 and a C++20 compiler. 
-OpenMP is optional (the build falls back to a single thread).
-On macOS, Apple Clang needs `brew install libomp`.
+Each block below can be pasted into a terminal as is.
+
+### 1. Install the prerequisites
+
+**macOS** (needs the Xcode Command Line Tools, `xcode-select --install`, and [Homebrew](https://brew.sh)):
 
 ```bash
-cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
-cmake --build build/release
-./build/release/md_sim # 500 particles: 2000 equilibration + 5000 production steps
+brew install cmake libomp glfw
 ```
+
+**Ubuntu / Debian:**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake git libglfw3-dev libgl-dev python3-venv
+```
+
+CMake ≥ 3.16 and a C++20 compiler are required. OpenMP and GLFW are optional: without OpenMP the build is
+single-threaded, and without GLFW the visualiser is skipped.
+
+### 2. Clone and build
+
+```bash
+git clone https://github.com/nhantran1711/molecular-dynamics.git
+cd molecular-dynamics
+cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
+cmake --build build/release --parallel
+```
+
+The first configure downloads GoogleTest. To build offline, add `-DMD_BUILD_TESTS=OFF` to the first `cmake`
+command.
+
+### 3. Run the tests
+
+```bash
+cd build/release
+ctest --output-on-failure
+cd ../..
+```
+
+### 4. Run a simulation
+
+The default is 500 particles of Lennard-Jones liquid: 2000 equilibration steps, then 5000 steps at constant
+energy, printing energies and temperature as it goes.
+
+```bash
+./build/release/md_sim
+```
+
+A larger system on 4 threads:
+
+```bash
+OMP_NUM_THREADS=4 ./build/release/md_sim 10
+```
+
+Constant temperature, with pressure in a CSV file, g(r), and a trajectory you can open in OVITO or VMD:
+
+```bash
+./build/release/md_sim 6 --nvt --temperature 0.9 --density 0.82 --csv run.csv --rdf rdf.csv --xyz trajectory.xyz
+```
+
+The visualiser (drag to orbit, scroll to zoom, H and C to heat and cool):
+
+```bash
+./build/release/md_vis 8
+```
+
+### 5. Benchmarks and validation (optional)
+
+These need Python 3 with matplotlib. A virtual environment keeps it separate from the system Python:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install matplotlib
+python bench/benchmark.py --quick
+```
+
+`python bench/benchmark.py` runs the full suite (a few minutes) and `python bench/validate.py` runs the NIST
+validation (about 25 minutes). Both write plots to `bench/plots/`.
+
+### Command-line options
 
 ```
 md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--density X]
