@@ -138,8 +138,8 @@ def run_timestep(quick, repeats):
     """Energy fluctuation vs dt at fixed physical time: Velocity Verlet is second order, so it should scale as dt^2.
 
     Two cutoffs, because the force jumps to zero at the cutoff and adds error that doesn't scale as dt^2; a
-    larger cutoff shrinks that jump. Each point is the mean of several runs: OpenMP reductions sum in a
-    different order every run, so trajectories (and a single run's RMS) differ run to run.
+    larger cutoff shrinks that jump. Each point is the mean of several runs with different seeds: a single
+    run's RMS depends on its trajectory. (Runs are reproducible, so repeats need distinct seeds.)
     """
     dts = TIMESTEPS[::2] if quick else TIMESTEPS
     equil_time, prod_time = (2.0, 5.0) if quick else (10.0, 20.0)
@@ -148,8 +148,8 @@ def run_timestep(quick, repeats):
         for dt in dts:
             path = RESULTS / f"timestep_rc{cutoff}_dt{dt}.csv"
             samples = []
-            for _ in range(repeats):
-                run_md(5, 4, "--cutoff", cutoff, "--dt", dt, "--equil", round(equil_time / dt),
+            for seed in range(1, repeats + 1):
+                run_md(5, 4, "--seed", seed, "--cutoff", cutoff, "--dt", dt, "--equil", round(equil_time / dt),
                        "--steps", round(prod_time / dt), "--csv", path)
                 samples.append(relative_rms_energy(path))
             mean = sum(samples) / len(samples)
