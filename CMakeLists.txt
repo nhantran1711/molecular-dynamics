@@ -11,6 +11,12 @@ endif()
 
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
 
+# compile_commands.json for clang-tidy and editor tooling
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# CI builds with -DMD_WERROR=ON so any new warning fails the build
+option(MD_WERROR "Treat compiler warnings as errors" OFF)
+
 # Sanitizer builds for CI, e.g. -DMD_SANITIZE=address,undefined or -DMD_SANITIZE=thread.
 # Applied to every target (including GoogleTest), so it must come before any target is defined
 set(MD_SANITIZE "" CACHE STRING "Comma-separated sanitizers to enable (address, undefined, thread)")
@@ -29,17 +35,18 @@ add_library(md_core STATIC
     src/CellList.cpp
     src/NeighbourList.cpp
     src/RadialDistribution.cpp
+    src/Trajectory.cpp
 )
 
 target_include_directories(md_core PUBLIC include)
-target_compile_options(md_core PUBLIC -Wall -Wextra -Wpedantic)
+target_compile_options(md_core PUBLIC -Wall -Wextra -Wpedantic $<$<BOOL:${MD_WERROR}>:-Werror>)
 
 # Apple clang ships without an OpenMP runtime, so point CMake at Homebrew's libomp (brew install libomp)
 if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     execute_process(COMMAND brew --prefix libomp OUTPUT_VARIABLE LIBOMP_PREFIX
                     OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     if(EXISTS "${LIBOMP_PREFIX}/lib/libomp.dylib")
-        set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include")
+        set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -isystem ${LIBOMP_PREFIX}/include")
         set(OpenMP_CXX_LIB_NAMES omp)
         set(OpenMP_omp_LIBRARY "${LIBOMP_PREFIX}/lib/libomp.dylib")
     endif()
@@ -87,6 +94,7 @@ if(MD_BUILD_TESTS)
         tests/test_dynamics.cpp
         tests/test_determinism.cpp
         tests/test_observables.cpp
+        tests/test_trajectory.cpp
     )
     target_link_libraries(md_tests PRIVATE md_core GTest::gtest_main)
 
