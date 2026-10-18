@@ -15,10 +15,11 @@ public:
     NeighbourList(double cutOff, double skin);
 
     // Rebuild only if a particle has moved more than skin / 2 since the last build. Returns true if rebuilt.
-    bool update(const System& system);
+    bool update(System& system);
 
-    // Unconditionally rebuild the list for the current positions
-    void build(const System& system);
+    // Unconditionally rebuild the list for the current positions. Also sorts the particles by cell,
+    // so particle indices change on every rebuild
+    void build(System& system);
 
     // Full list: every neighbour j != i of particle i, so each pair appears twice (i -> j and j -> i).
     // Costs double the pair work, but a thread handling particle i only ever writes to particle i.
