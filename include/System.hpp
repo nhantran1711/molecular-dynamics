@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Particle.hpp"
+#include <cmath>
+#include <cstddef>
+#include <span>
 #include <vector>
 
 class System {
@@ -21,11 +24,30 @@ public:
     };
 
 
-    // Using PBC, find the minimum image distance between two particles
-    std::array<double, 3> minimumImageDistance(const std::array<double, 3>& ri, const std::array<double, 3>& rj) const;
+    // Using PBC, find the minimum image distance between two particles.
+    // Defined in the header so it inlines into the hot pair loops in other source files
+    std::array<double, 3> minimumImageDistance(const std::array<double, 3>& ri, const std::array<double, 3>& rj) const {
+        std::array<double, 3> dr {};
+
+        for (int k = 0; k < 3; ++k) {
+            dr[k] = ri[k] - rj[k];
+
+            // PBC
+            dr[k] -= boxLength_ * std::round(dr[k] * inverseBoxLength_);
+        }
+        return dr;
+    };
 
     // Wrap the position of a particle back into the simulation box
-    void wrapPosition(std::array<double, 3>& r) const;
+    void wrapPosition(std::array<double, 3>& r) const {
+        for (int k = 0; k < 3; ++k) {
+            r[k] -= boxLength_ * std::floor(r[k] * inverseBoxLength_);
+        }
+    };
+
+    // Permute the particles so that new particle k is old particle order[k].
+    // Particle indices are not stable identities: anything holding indices must be rebuilt afterwards
+    void reorder(std::span<const std::size_t> order);
 
     // Calculate the total kinetic energy of the system
     double kineticEnergy() const;
@@ -34,5 +56,6 @@ public:
     double temperature() const;
 private:
     double boxLength_;
+    double inverseBoxLength_;
     std::vector<Particle> particles_;
 };
