@@ -84,6 +84,7 @@ if(MD_BUILD_TESTS)
         tests/test_forcefield.cpp
         tests/test_neighbourlist.cpp
         tests/test_dynamics.cpp
+        tests/test_determinism.cpp
     )
     target_link_libraries(md_tests PRIVATE md_core GTest::gtest_main)
 
