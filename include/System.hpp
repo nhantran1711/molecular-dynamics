@@ -23,6 +23,10 @@ public:
         return boxLength_;
     };
 
+    double getInverseBoxLength() const {
+        return inverseBoxLength_;
+    };
+
 
     // Using PBC, find the minimum image distance between two particles.
     // Defined in the header so it inlines into the hot pair loops in other source files

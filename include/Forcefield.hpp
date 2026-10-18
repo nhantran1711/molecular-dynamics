@@ -11,8 +11,8 @@ public:
     // Compute the forces on every particle by checking all pairs (O(N^2)) and return the total potential energy
     double computeForces(System& system) const;
 
-    // Compute the forces using only the pairs in the neighbour list (O(N)), in parallel with OpenMP,
-    // and return the total potential energy
+    // Compute the forces using only the pairs in the neighbour list (O(N)), in parallel with OpenMP and
+    // with the pair maths vectorised (SIMD), and return the total potential energy
     double computeForces(System& system, const NeighbourList& neighbourList) const;
 
     double getCutOff() const {
