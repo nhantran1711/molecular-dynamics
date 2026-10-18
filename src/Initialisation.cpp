@@ -1,4 +1,5 @@
 #include "Initialisation.hpp"
+#include "Thermostat.hpp"
 #include <cmath>
 #include <random>
 
@@ -72,10 +73,5 @@ void initializeVelocities(System& system, double temperature, std::uint32_t seed
     }
 
     // Rescale velocities to hit the target temperature exactly
-    double scale = std::sqrt(temperature / system.temperature());
-    for (auto& particle : particles) {
-        for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] *= scale;
-        }
-    }
+    rescaleVelocities(system, temperature);
 }
