@@ -15,6 +15,8 @@ All quantities are in reduced Lennard-Jones units (ε = σ = m = k_B = 1).
 - **Cell lists** (counting sort into cells ≥ r_c + skin wide) used to build **Verlet neighbour lists**, rebuilt
   only when some particle has moved more than half the skin
 - **OpenMP** parallel force calculation, neighbour list build, integration and reductions
+- **Reproducible results:** bitwise-identical runs at a fixed thread count by default, and at *any* thread
+  count with `--deterministic`
 - **SIMD-vectorised force kernel** (`#pragma omp simd`, confirmed with compiler vectorisation reports)
 - **Real-time OpenGL visualiser** (`md_vis`): particles drawn as sphere-shaded point sprites coloured by
   speed, with live temperature control to melt or freeze the system
@@ -48,6 +50,7 @@ md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--
 | `--cutoff` | 2.5 | interaction cutoff |
 | `--equil` / `--steps` | 2000 / 5000 | equilibration / production steps |
 | `--csv` | – | write per-step energies and temperature |
+| `--deterministic` | off | bitwise-identical results for any thread count (costs 6–36%) |
 | `--quiet` | off | print only the machine-readable `RESULT` line |
 
 Set the thread count with `OMP_NUM_THREADS`.
@@ -72,6 +75,34 @@ OpenGL 4.1 and has only been tested on macOS.
 
 Temperature, energy and frame rate are shown in the window title. `--screenshot out.ppm [--frames N]`
 renders N frames off-screen, saves the last one and exits.
+
+## Testing
+
+```bash
+ctest --test-dir build/release --output-on-failure     # 29 GoogleTest tests, ~4 s
+```
+
+The tests cover every component:
+
+- **Forces against analytic values:** two-particle force and energy, the zero-force point at 2^(1/6)σ,
+  nothing beyond the cutoff, interaction across a periodic boundary.
+- **Neighbour-list forces against the O(N²) reference**, at 1, 3 and 8 threads (3 checks uneven work
+  division); total force ≈ 0.
+- **Neighbour list** contains exactly the pairs within r_c + skin, including the small-box fallback, and
+  rebuilds only after a particle moves more than half the skin.
+- **Cell list:** each particle is in exactly one cell, matching its position; the 27 neighbour cells are
+  distinct and wrap around the box.
+- **Dynamics:** energy conservation, momentum conservation, and **time reversibility** (run forward, flip
+  velocities, run back, and every particle returns to within 10⁻⁸ of its start).
+- **Determinism:** identical state hashes across repeated runs at a fixed thread count, and across 1–8
+  threads in deterministic mode.
+
+The tests were checked by deliberately breaking the code: skipping neighbour cells, or flipping the sign of
+the SIMD scatter, makes 6 and 7 tests fail respectively.
+
+CI (GitHub Actions) builds and tests on Linux and macOS, and runs the tests under AddressSanitizer +
+UndefinedBehaviorSanitizer and under ThreadSanitizer (with LLVM's Archer, so OpenMP's own synchronisation is
+understood). For a sanitizer build locally: `-DMD_SANITIZE=address,undefined` or `-DMD_SANITIZE=thread`.
 
 ## Benchmarks
 
@@ -171,6 +202,33 @@ This is far below the 2× ideal: NEON holds only 2 doubles, the gather and scatt
 rebuilds and integration aren't vectorised. A struct-of-arrays particle layout would remove the gather and
 scatter copies, and single precision (4 lanes) or AVX-512 on x86 (8 doubles) would give more.
 
+**Reproducibility.** Every run prints a hash of the final positions and velocities (`state_hash` in the
+`RESULT` line), so two runs can be compared bit for bit. At first, 6 runs at 4 threads gave 4 different final
+states. The cause was `reduction(+)` in the kinetic energy: OpenMP combines the per-thread partial sums in
+an unspecified order, so the last bits can differ, and the thermostat feeds that value back into the
+trajectory. MD is chaotic, so a last-bit difference grows into a completely different trajectory. Two fixes,
+at two strengths:
+
+- **Default: identical at a fixed thread count.** Energies use a fixed-order blocked sum
+  (`deterministicSum`: fixed-size blocks summed in parallel, then combined in order). The force arrays were
+  already summed in thread order. No measurable cost.
+- **`--deterministic`: identical at any thread count.** The per-thread force arrays group each particle's
+  contributions differently depending on the thread count. So in this mode every pair's force goes to its
+  own slot, and each particle then adds up its own contributions in an order fixed by the neighbour list
+  (pairs where it is first, then a reverse index of pairs where it is second). The extra memory traffic
+  costs:
+
+| | default | `--deterministic` | |
+|---|---|---|---|
+| N = 4000, 1 thread | 1.44 ms | 1.68 ms | +17% |
+| N = 4000, 4 threads | 0.70 ms | 0.74 ms | +6% |
+| N = 13,500, 1 thread | 5.30 ms | 6.17 ms | +16% |
+| N = 13,500, 4 threads | 1.92 ms | 2.61 ms | +36% |
+
+The worst case is large N on 4 threads: the per-pair arrays (~13 MB) no longer fit in cache, and the
+reverse-index pass reads them from scattered addresses. Restoring the old reduction makes the reproducibility test fail in 3 of 5
+runs.
+
 **Checking correctness.** The neighbour-list forces match the O(N²) reference to within 2×10⁻¹⁴, at several
 thread counts including uneven ones. Energy conservation acts as an end-to-end check: a race or a missed pair
 shows up as drift.
@@ -191,6 +249,8 @@ include/, src/
 vis/
   Renderer        OpenGL drawing: point-sprite spheres, box outline, orbit camera
   main.cpp        md_vis window, input and live simulation loop
+tests/              GoogleTest unit tests
 bench/benchmark.py  benchmark runner and plots
+.github/workflows/  CI: Linux + macOS build and test, ASan/UBSan and TSan jobs
 ```
 
