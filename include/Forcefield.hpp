@@ -19,6 +19,11 @@ public:
         return cut_off_;
     };
 
+    // Set whether to use the deterministic force mode, which produces bitwise-identical forces for any thread count
+    void setDeterministic(bool deterministic) {
+        deterministic_ = deterministic;
+    };
+
 private:
     // For a pair at squared distance r2 inside the cutoff, return F/r and the pair's shifted potential energy
     struct PairTerms {
@@ -30,9 +35,15 @@ private:
     // Check that the cutoff is less than half the box length, throwing an exception if not
     void checkCutOff(const System& system) const;
 
+    double computeForcesDeterministic(System& system, const NeighbourList& neighbourList) const;
+
     // One force array per thread for the neighbour list loop, summed at the end. Kept between calls to
     // avoid reallocating, which also means computeForces must not run concurrently on one force field
     mutable std::vector<std::array<double, 3>> threadForces_;
+
+    // Deterministic mode: force components and energy of every pair, indexed like the neighbour list
+    mutable std::vector<double> pairFx_, pairFy_, pairFz_, pairEnergy_;
+    bool deterministic_ {false};
 
     double epsilon_;
     double sigma_;
