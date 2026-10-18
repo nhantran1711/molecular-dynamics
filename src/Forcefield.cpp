@@ -47,6 +47,8 @@ double LennardJonesForceField::computeForces(System& system) const {
     }
 
     double potential = 0.0;
+    double virial = 0.0;
+    double insidePairs = 0.0;
 
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = i + 1; j < n; ++j) {
@@ -66,8 +68,12 @@ double LennardJonesForceField::computeForces(System& system) const {
                 particles[j].force[k] -= f_over_r * dr[k];
             }
             potential += energy;
+            virial += f_over_r * r2;   // r . F = (F / r) r^2
+            insidePairs += 1.0;
         }
     }
+    virial_ = virial;
+    insidePairs_ = insidePairs;
     return potential;
 }
 
@@ -84,11 +90,13 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
     const std::size_t n = particles.size();
 
     double potential = 0.0;
+    double virial = 0.0;
+    double insidePairs = 0.0;
 
     // Half neighbour list, so each pair is computed once and its force applied to both particles. Two threads
     // can share a particle j, so each thread accumulates into its own force array, and the arrays are summed
     // per particle at the end
-    #pragma omp parallel reduction(+:potential)
+    #pragma omp parallel reduction(+:potential, virial, insidePairs)
     {
         // single has an implicit barrier, so every thread sees the resized buffer
         #pragma omp single
@@ -128,9 +136,9 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
             // different branches: pairs beyond the cutoff (still in the list thanks to the skin) are computed
             // anyway and masked to zero
             const auto& ri = particles[i].position;
-            double fix = 0.0, fiy = 0.0, fiz = 0.0, energy_i = 0.0;
+            double fix = 0.0, fiy = 0.0, fiz = 0.0, energy_i = 0.0, virial_i = 0.0, inside_i = 0.0;
 
-            #pragma omp simd reduction(+:fix, fiy, fiz, energy_i)
+            #pragma omp simd reduction(+:fix, fiy, fiz, energy_i, virial_i, inside_i)
             for (std::size_t k = 0; k < m; ++k) {
                 // Minimum image convention, as in System::minimumImageDistance
                 double dx = ri[0] - xj[k];
@@ -146,6 +154,8 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
                 const bool inside = r2 < cut_off_squared_;
                 f_over_r = inside ? f_over_r : 0.0;
                 energy_i += inside ? energy : 0.0;
+                virial_i += f_over_r * r2;
+                inside_i += inside ? 1.0 : 0.0;
 
                 // Newton's third law: + on particle i here, - on particle j in the scatter below
                 fix += f_over_r * dx;
@@ -168,6 +178,8 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
             forces[i][1] += fiy;
             forces[i][2] += fiz;
             potential += energy_i;
+            virial += virial_i;
+            insidePairs += inside_i;
         }
 
         // Sum every thread's contribution for each particle. Each thread owns distinct particles, so no races
@@ -185,6 +197,8 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
             particles[i].force = total;
         }
     }
+    virial_ = virial;
+    insidePairs_ = insidePairs;
     return potential;
 }
 
@@ -202,14 +216,17 @@ double LennardJonesForceField::computeForcesDeterministic(System& system, const 
     const std::size_t pairs = neighbourList.getPairCount();
 
     // Resize the pair force and energy buffers to hold one entry per pair, indexed like the neighbour list. The buffers are kept between calls to avoid reallocating, which also means computeForces must not run concurrently on one force field
-    for (auto* buffer : {&pairFx_, &pairFy_, &pairFz_, &pairEnergy_}) {
+    for (auto* buffer : {&pairFx_, &pairFy_, &pairFz_, &pairEnergy_, &pairVirial_}) {
         buffer->resize(pairs);
     }
 
     const double boxLength = system.getBoxLength();
     const double inverseBoxLength = system.getInverseBoxLength();
 
-    #pragma omp parallel
+    // Counting pairs in the cutoff: sums of whole numbers are exact in any order, so a reduction stays deterministic
+    double insidePairs = 0.0;
+
+    #pragma omp parallel reduction(+:insidePairs)
     {
         std::vector<double> xj, yj, zj;
 
@@ -238,11 +255,14 @@ double LennardJonesForceField::computeForcesDeterministic(System& system, const 
             double* fy = pairFy_.data() + first;
             double* fz = pairFz_.data() + first;
             double* e = pairEnergy_.data() + first;
+            double* w = pairVirial_.data() + first;
             const auto& ri = particles[i].position;
 
             // Same branch-free pair maths as the default kernel, but every pair writes its own slot instead of
             // being summed, so there is no reduction whose order could vary
-            #pragma omp simd
+            double inside_i = 0.0;
+
+            #pragma omp simd reduction(+:inside_i)
             for (std::size_t k = 0; k < m; ++k) {
                 double dx = ri[0] - xj[k];
                 double dy = ri[1] - yj[k];
@@ -260,7 +280,10 @@ double LennardJonesForceField::computeForcesDeterministic(System& system, const 
                 fy[k] = f_over_r * dy;
                 fz[k] = f_over_r * dz;
                 e[k] = inside ? energy : 0.0;
+                w[k] = f_over_r * r2;
+                inside_i += inside ? 1.0 : 0.0;
             }
+            insidePairs += inside_i;
         }
     }
 
@@ -282,6 +305,11 @@ double LennardJonesForceField::computeForcesDeterministic(System& system, const 
         }
         particles[i].force = force;
     }
+
+    virial_ = deterministicSum(pairs, [this](std::size_t k) {
+        return pairVirial_[k];
+    });
+    insidePairs_ = insidePairs;
 
     return deterministicSum(pairs, [this](std::size_t k) {
         return pairEnergy_[k];
