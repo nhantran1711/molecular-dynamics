@@ -30,7 +30,7 @@ std::uint64_t runAndHash(int threads, bool deterministic) {
     return hash;
 }
 
-}
+} // namespace
 
 // Default mode: the same thread count must reproduce the same trajectory bit for bit
 TEST(Determinism, DefaultModeIsReproducibleAtFixedThreadCount) {
@@ -62,8 +62,9 @@ TEST(Determinism, DeterministicForcesMatchAllPairs) {
             forceField.setDeterministic(true);
             double energy = forceField.computeForces(system, list);
             std::vector<std::array<double, 3>> forces;
-            for (const auto& p : system.getParticles()) {
-                forces.push_back(p.force);
+            forces.reserve(system.size());
+            for (std::size_t i = 0; i < system.size(); ++i) {
+                forces.push_back(system.forceOf(i));
             }
 
             double reference = forceField.computeForces(system);
@@ -72,7 +73,7 @@ TEST(Determinism, DeterministicForcesMatchAllPairs) {
             double maxDiff = 0.0;
             for (std::size_t i = 0; i < forces.size(); ++i) {
                 for (int k = 0; k < 3; ++k) {
-                    maxDiff = std::max(maxDiff, std::abs(forces[i][k] - system.getParticles()[i].force[k]));
+                    maxDiff = std::max(maxDiff, std::abs(forces[i][k] - system.forceOf(i)[k]));
                 }
             }
             EXPECT_LT(maxDiff, 1e-11) << threads << " threads";
@@ -84,7 +85,7 @@ TEST(Determinism, RequiresReverseIndex) {
     System system = test::makeLattice(6);
     LennardJonesForceField forceField(1.0, 1.0, test::cutOff);
     forceField.setDeterministic(true);
-    NeighbourList list(test::cutOff, test::skin);   // no reverse index
+    NeighbourList list(test::cutOff, test::skin); // no reverse index
     list.build(system);
     EXPECT_THROW(forceField.computeForces(system, list), std::runtime_error);
 }
@@ -95,7 +96,7 @@ TEST(Determinism, ReverseIndexListsEveryPairOnce) {
     list.build(system);
 
     std::vector<int> seen(list.getPairCount(), 0);
-    for (std::size_t j = 0; j < system.getParticles().size(); ++j) {
+    for (std::size_t j = 0; j < system.size(); ++j) {
         std::size_t previous = 0;
         bool firstPair = true;
         for (std::size_t k : list.pairsAsSecond(j)) {

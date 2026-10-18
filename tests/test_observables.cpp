@@ -45,7 +45,7 @@ TEST(Observables, BussiThermostatSamplesCanonicalKineticEnergy) {
     test::withThreads(1, [] {
         System system = test::makeLattice(5);
         const double target = 0.85;
-        const double dof = 3.0 * static_cast<double>(system.getParticles().size()) - 3.0;
+        const double dof = 3.0 * static_cast<double>(system.size()) - 3.0;
         BussiThermostat thermostat(target, 0.05, 7);
 
         double sumK = 0.0;
@@ -71,7 +71,7 @@ TEST(Observables, BussiThermostatSamplesCanonicalKineticEnergy) {
 TEST(Observables, RadialDistributionOfIdealGasIsOne) {
     const double boxLength = 12.0;
     const int n = 2000;
-    std::mt19937 rng(3);
+    std::mt19937 rng(3); // NOLINT(bugprone-random-generator-seed): fixed seed keeps the test reproducible
     std::uniform_real_distribution<double> uniform(0.0, boxLength);
 
     RadialDistribution rdf(test::cutOff, 25);
@@ -89,7 +89,7 @@ TEST(Observables, RadialDistributionOfIdealGasIsOne) {
     const auto r = rdf.radii();
     const auto g = rdf.values();
     for (std::size_t b = 0; b < g.size(); ++b) {
-        if (r[b] > 1.0) {   // small shells hold few pairs, so their noise is large
+        if (r[b] > 1.0) { // small shells hold few pairs, so their noise is large
             EXPECT_NEAR(g[b], 1.0, 0.06) << "r = " << r[b];
         }
     }

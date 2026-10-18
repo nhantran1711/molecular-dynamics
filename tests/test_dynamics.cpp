@@ -81,16 +81,17 @@ TEST(Dynamics, IsTimeReversible) {
     forceField.computeForces(system);
 
     std::vector<std::array<double, 3>> start;
-    for (const auto& p : system.getParticles()) {
-        start.push_back(p.position);
+    start.reserve(system.size());
+    for (std::size_t i = 0; i < system.size(); ++i) {
+        start.push_back(system.positionOf(i));
     }
 
     const int steps = 100;
     for (int s = 0; s < steps; ++s) {
         integrator.step(system, forceField);
     }
-    for (auto& p : system.getParticles()) {
-        for (double& v : p.velocity) {
+    for (int k = 0; k < 3; ++k) {
+        for (double& v : system.velocity(k)) {
             v = -v;
         }
     }
@@ -99,9 +100,8 @@ TEST(Dynamics, IsTimeReversible) {
     }
 
     double maxError = 0.0;
-    const auto& particles = system.getParticles();
-    for (std::size_t i = 0; i < particles.size(); ++i) {
-        auto dr = system.minimumImageDistance(particles[i].position, start[i]);
+    for (std::size_t i = 0; i < system.size(); ++i) {
+        auto dr = system.minimumImageDistance(system.positionOf(i), start[i]);
         maxError = std::max({maxError, std::abs(dr[0]), std::abs(dr[1]), std::abs(dr[2])});
     }
     EXPECT_LT(maxError, 1e-8);

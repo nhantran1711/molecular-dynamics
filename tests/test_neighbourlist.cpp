@@ -22,10 +22,9 @@ PairSet pairsInList(const NeighbourList& list, std::size_t n) {
 
 PairSet pairsWithin(const System& system, double radius) {
     PairSet pairs;
-    const auto& p = system.getParticles();
-    for (std::size_t i = 0; i < p.size(); ++i) {
-        for (std::size_t j = i + 1; j < p.size(); ++j) {
-            auto dr = system.minimumImageDistance(p[i].position, p[j].position);
+    for (std::size_t i = 0; i < system.size(); ++i) {
+        for (std::size_t j = i + 1; j < system.size(); ++j) {
+            auto dr = system.minimumImageDistance(i, j);
             if (dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2] < radius * radius) {
                 pairs.insert({i, j});
             }
@@ -34,7 +33,7 @@ PairSet pairsWithin(const System& system, double radius) {
     return pairs;
 }
 
-}
+} // namespace
 
 TEST(NeighbourList, ContainsExactlyThePairsWithinListRadius) {
     System system = test::makeLiquid(8);
@@ -43,7 +42,7 @@ TEST(NeighbourList, ContainsExactlyThePairsWithinListRadius) {
             NeighbourList list(test::cutOff, test::skin);
             list.build(system);
             const auto expected = pairsWithin(system, test::cutOff + test::skin);
-            EXPECT_EQ(pairsInList(list, system.getParticles().size()), expected) << threads << " threads";
+            EXPECT_EQ(pairsInList(list, system.size()), expected) << threads << " threads";
             EXPECT_EQ(list.getPairCount(), expected.size());
         });
     }
@@ -54,7 +53,7 @@ TEST(NeighbourList, SmallBoxFallbackIsCorrect) {
     System system = test::makeLiquid(4);
     NeighbourList list(test::cutOff, test::skin);
     list.build(system);
-    EXPECT_EQ(pairsInList(list, system.getParticles().size()), pairsWithin(system, test::cutOff + test::skin));
+    EXPECT_EQ(pairsInList(list, system.size()), pairsWithin(system, test::cutOff + test::skin));
 }
 
 TEST(NeighbourList, RebuildsOnlyAfterHalfSkinDisplacement) {
@@ -63,20 +62,22 @@ TEST(NeighbourList, RebuildsOnlyAfterHalfSkinDisplacement) {
     list.build(system);
     const int builds = list.getRebuildCount();
 
-    auto& particle = system.getParticles()[0];
-    particle.position[0] += 0.4 * test::skin;
-    system.wrapPosition(particle.position);
+    auto r = system.positionOf(0);
+    r[0] += 0.4 * test::skin;
+    system.wrapPosition(r);
+    system.setPosition(0, r);
     EXPECT_FALSE(list.update(system));
     EXPECT_EQ(list.getRebuildCount(), builds);
 
-    particle.position[0] += 0.2 * test::skin;   // now 0.6 skin from where it was at the last build
-    system.wrapPosition(particle.position);
+    r[0] += 0.2 * test::skin; // now 0.6 skin from where it was at the last build
+    system.wrapPosition(r);
+    system.setPosition(0, r);
     EXPECT_TRUE(list.update(system));
     EXPECT_EQ(list.getRebuildCount(), builds + 1);
 }
 
 TEST(NeighbourList, RejectsListRadiusBeyondHalfBox) {
-    System system = test::makeLattice(3);   // box ~5 sigma, list radius 2.7 > 2.5
+    System system = test::makeLattice(3); // box ~5 sigma, list radius 2.7 > 2.5
     NeighbourList list(test::cutOff, test::skin);
     EXPECT_THROW(list.build(system), std::runtime_error);
 }
@@ -90,12 +91,12 @@ TEST(CellList, EveryParticleInExactlyOneCellMatchingItsPosition) {
     ASSERT_GE(n, 3);
     const double cellSize = system.getBoxLength() / n;
 
-    std::vector<int> seen(system.getParticles().size(), 0);
+    std::vector<int> seen(system.size(), 0);
     for (int c = 0; c < n * n * n; ++c) {
         for (std::size_t i : cells.particlesIn(c)) {
             ++seen[i];
             EXPECT_EQ(cells.cellOf(i), c);
-            const auto& r = system.getParticles()[i].position;
+            const auto& r = system.positionOf(i);
             int expected = 0;
             for (int k = 0; k < 3; ++k) {
                 expected = expected * n + std::min(static_cast<int>(r[k] / cellSize), n - 1);

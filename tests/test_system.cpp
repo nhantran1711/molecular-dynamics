@@ -9,7 +9,7 @@ System emptyBox(double boxLength) {
     return System({}, boxLength);
 }
 
-}
+} // namespace
 
 TEST(System, MinimumImagePicksNearestPeriodicCopy) {
     System system = emptyBox(10.0);
@@ -29,7 +29,8 @@ TEST(System, MinimumImagePicksNearestPeriodicCopy) {
 
 TEST(System, MinimumImageComponentsNeverExceedHalfBox) {
     System system = emptyBox(7.0);
-    for (double x = -20.0; x <= 20.0; x += 0.37) {
+    for (int step = 0; step <= 108; ++step) {
+        const double x = -20.0 + 0.37 * step;
         auto dr = system.minimumImageDistance({x, 2.0 * x, -x}, {0.0, 0.0, 0.0});
         for (double d : dr) {
             EXPECT_LE(std::abs(d), 3.5 + 1e-12);
@@ -46,7 +47,8 @@ TEST(System, WrapPositionMapsIntoBox) {
     EXPECT_NEAR(r[1], 0.0, 1e-12);
     EXPECT_NEAR(r[2], 3.0, 1e-12);
 
-    for (double x = -35.0; x <= 35.0; x += 0.73) {
+    for (int step = 0; step <= 95; ++step) {
+        const double x = -35.0 + 0.73 * step;
         std::array<double, 3> p {x, -x, 0.5 * x};
         system.wrapPosition(p);
         for (double c : p) {
@@ -81,6 +83,6 @@ TEST(System, ReorderPermutesParticles) {
     system.reorder(order);
 
     for (std::size_t k = 0; k < order.size(); ++k) {
-        EXPECT_DOUBLE_EQ(system.getParticles()[k].position[0], static_cast<double>(order[k]));
+        EXPECT_DOUBLE_EQ(system.positionOf(k)[0], static_cast<double>(order[k]));
     }
 }
