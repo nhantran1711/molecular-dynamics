@@ -18,6 +18,8 @@ add_executable(md_sim
     src/Integrator.cpp
     src/Initialisation.cpp
     src/Thermostat.cpp
+    src/CellList.cpp
+    src/NeighbourList.cpp
 )
 
 target_include_directories(md_sim PRIVATE include)
