@@ -62,9 +62,9 @@ inline std::array<double, 3> totalMomentum(const System& system) {
     std::array<double, 3> p {0.0, 0.0, 0.0};
 
     // Sum the momentum of each particle in the system
-    for (const auto& particle : system.getParticles()) {
-        for (int k = 0; k < 3; ++k) {
-            p[k] += particle.mass * particle.velocity[k];
+    for (int k = 0; k < 3; ++k) {
+        for (std::size_t i = 0; i < system.size(); ++i) {
+            p[k] += system.mass()[i] * system.velocity(k)[i];
         }
     }
     return p;
@@ -84,4 +84,4 @@ void withThreads(int threads, F&& body) {
 #endif
 }
 
-}
+} // namespace test
