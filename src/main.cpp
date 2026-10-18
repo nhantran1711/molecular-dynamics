@@ -2,6 +2,7 @@
 #include "Initialisation.hpp"
 #include "Integrator.hpp"
 #include "NeighbourList.hpp"
+#include "RadialDistribution.hpp"
 #include "System.hpp"
 #include "Thermostat.hpp"
 #include <algorithm>
@@ -30,11 +31,17 @@ struct Options {
     const char* csvPath = nullptr;     // per-step energies and temperature, for plotting
     bool quiet = false;                // only print the RESULT line
     bool deterministic = false;        // bitwise-identical results for any thread count
+    double density = 0.8442;           // liquid argon near the triple point
+    double temperature = 0.728;
+    bool nvt = false;                  // keep a (Bussi) thermostat on during production
+    const char* rdfPath = nullptr;     // write g(r) averaged over production
+    unsigned seed = 42;                // initial velocities and thermostat noise
 };
 
 void printUsage() {
     std::fprintf(stderr,
-        "Usage: md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--csv PATH] [--deterministic] [--quiet]\n");
+        "Usage: md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--density X] [--temperature X] [--nvt] [--seed N]\n"
+        "              [--csv PATH] [--rdf PATH] [--deterministic] [--quiet]\n");
 }
 
 // Parse command line arguments, returning false on anything unrecognised
@@ -49,6 +56,16 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.quiet = true;
         } else if (arg == "--deterministic") {
             options.deterministic = true;
+        } else if (arg == "--nvt") {
+            options.nvt = true;
+        } else if (arg == "--seed" && hasValue) {
+            options.seed = static_cast<unsigned>(std::strtoul(argv[++a], nullptr, 10));
+        } else if (arg == "--density" && hasValue) {
+            options.density = std::atof(argv[++a]);
+        } else if (arg == "--temperature" && hasValue) {
+            options.temperature = std::atof(argv[++a]);
+        } else if (arg == "--rdf" && hasValue) {
+            options.rdfPath = argv[++a];
         } else if (arg == "--dt" && hasValue) {
             options.dt = std::atof(argv[++a]);
         } else if (arg == "--skin" && hasValue) {
@@ -67,7 +84,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             return false;
         }
     }
-    return options.cellsPerSide > 0 && options.dt > 0.0 && options.skin > 0.0 && options.cutOff > 0.0 && options.productionSteps > 0 && options.equilibrationSteps >= 0;
+    return options.cellsPerSide > 0 && options.dt > 0.0 && options.skin > 0.0 && options.cutOff > 0.0 && options.density > 0.0
+        && options.temperature > 0.0 && options.productionSteps > 0 && options.equilibrationSteps >= 0;
 }
 
 }
@@ -84,8 +102,8 @@ int main(int argc, char** argv) {
     const bool useNeighbourList = options.useNeighbourList;
     const bool quiet = options.quiet;
 
-    const double density = 0.8442;       // Liquid argon near the triple point
-    const double temperature = 0.728;
+    const double density = options.density;
+    const double temperature = options.temperature;
     const double cutOff = options.cutOff;
     const double skin = options.skin;
     const double dt = options.dt;
@@ -102,7 +120,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "Could not open %s: %s\n", options.csvPath, std::strerror(errno));
             return 1;
         }
-        std::fprintf(csv, "step,time,phase,ke_per_particle,pe_per_particle,e_per_particle,temperature\n");
+        std::fprintf(csv, "step,time,phase,ke_per_particle,pe_per_particle,e_per_particle,temperature,pressure,inside_pairs\n");
     }
 
     // FCC has 4 particles per unit cell, so a^3 = 4 / density
@@ -111,7 +129,7 @@ int main(int argc, char** argv) {
 
     // Create the system and initialize velocities
     System system(createFCCLattice(cellsPerSide, latticeConstant), boxLength);
-    initializeVelocities(system, temperature, 42);
+    initializeVelocities(system, temperature, options.seed);
 
     // Create the force field and integrator
     LennardJonesForceField forceField(1.0, 1.0, cutOff);
@@ -145,9 +163,16 @@ int main(int argc, char** argv) {
         std::printf("%8s %12s %12s %12s %12s\n", "step", "KE/N", "PE/N", "E/N", "T");
     }
 
+    // Virial pressure P = (2 KE + W) / 3V, without tail corrections
+    const double volume = boxLength * boxLength * boxLength;
+    auto pressure = [&](double kinetic) {
+        return (2.0 * kinetic + forceField.getVirial()) / (3.0 * volume);
+    };
+
     auto writeRow = [&](int step, const char* phase, double kinetic, double potentialEnergy, double t) {
-        std::fprintf(csv, "%d,%.6f,%s,%.8f,%.8f,%.8f,%.8f\n", step, step * dt, phase,
-            kinetic / n, potentialEnergy / n, (kinetic + potentialEnergy) / n, t);
+        std::fprintf(csv, "%d,%.6f,%s,%.8f,%.8f,%.8f,%.8f,%.8f,%.0f\n", step, step * dt, phase,
+            kinetic / n, potentialEnergy / n, (kinetic + potentialEnergy) / n, t, pressure(kinetic),
+            forceField.getInsidePairs());
     };
 
     for (int step = 1; step <= equilibrationSteps; ++step) {
@@ -169,14 +194,21 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Production: run the simulation in the NVE ensemble and measure the temperature and energy drift
+    // Production: NVE by default (energy drift is then meaningful), or NVT with the Bussi thermostat
+    BussiThermostat thermostat(temperature, 0.5, options.seed);
+    RadialDistribution rdf(cutOff, 150);
+    if (options.rdfPath && !useNeighbourList) {
+        std::fprintf(stderr, "--rdf needs the neighbour list (drop --brute)\n");
+        return 1;
+    }
+
     const double initialEnergy = system.kineticEnergy() + potential;
     double sumT = 0.0;
     double sumT2 = 0.0;
     double maxDrift = 0.0;
 
     if (!quiet) {
-        std::printf("\nProduction (%d steps, NVE)\n", productionSteps);
+        std::printf("\nProduction (%d steps, %s)\n", productionSteps, options.nvt ? "NVT, Bussi thermostat" : "NVE");
         std::printf("%8s %12s %12s %12s %12s %12s\n", "step", "KE/N", "PE/N", "E/N", "T", "dE/E0");
     }
 
@@ -186,6 +218,13 @@ int main(int argc, char** argv) {
     // Run the production steps, compute the kinetic energy, potential energy, total energy, temperature, and energy drift
     for (int step = 1; step <= productionSteps; ++step) {
         potential = advance();
+
+        if (options.nvt) {
+            thermostat.apply(system, dt);
+        }
+        if (options.rdfPath && step % 10 == 0) {
+            rdf.sample(system, neighbourList);
+        }
 
         double kinetic = system.kineticEnergy();
         double total = kinetic + potential;
@@ -212,6 +251,10 @@ int main(int argc, char** argv) {
 
     if (csv) {
         std::fclose(csv);
+    }
+    if (options.rdfPath && !rdf.write(options.rdfPath)) {
+        std::fprintf(stderr, "Could not write %s: %s\n", options.rdfPath, std::strerror(errno));
+        return 1;
     }
 
     // Calculate the mean and standard deviation of the temperature over the production steps
