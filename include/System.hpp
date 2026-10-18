@@ -29,6 +29,9 @@ public:
 
     // Calculate the total kinetic energy of the system
     double kineticEnergy() const;
+
+    // Calculate the instantaneous temperature (k_B = 1) from the kinetic energy
+    double temperature() const;
 private:
     double boxLength_;
     std::vector<Particle> particles_;
