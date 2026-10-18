@@ -321,7 +321,14 @@ int main(int argc, char** argv) {
     double stdT = std::sqrt(std::max(0.0, sumT2 / productionSteps - meanT * meanT));
 
     if (!quiet) {
-        std::printf("\n<T> = %.4f +/- %.4f (target %.4f), max |dE/E0| = %.2e\n", meanT, stdT, temperature, maxDrift);
+        if (options.nvt) {
+            // The thermostat exchanges energy with a heat bath, so total energy is not conserved and drift means nothing
+            std::printf("\n<T> = %.4f +/- %.4f (target %.4f), NVT: total energy not conserved by design\n", meanT, stdT,
+                        temperature);
+        } else {
+            std::printf("\n<T> = %.4f +/- %.4f (target %.4f), max |dE/E0| = %.2e\n", meanT, stdT, temperature,
+                        maxDrift);
+        }
 
         // If the neighbour list was used, print the number of rebuilds and pairs in the list
         if (useNeighbourList) {

@@ -8,3 +8,6 @@ bench/results/
 __pycache__
 
 .venv/
+/run.csv
+/rdf.csv
+/*.xyz
