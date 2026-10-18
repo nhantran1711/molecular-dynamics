@@ -36,6 +36,229 @@ All quantities are in reduced Lennard-Jones units (ε = σ = m = k_B = 1).
   (optionally melting at T = 2 first), then NVE or NVT production
 - A **benchmark suite** (`bench/benchmark.py`) that runs the sweeps below and regenerates every plot
 
+## How it works
+
+All quantities are in reduced units: lengths in σ, energies in ε, masses in m, temperature in ε/k_B and time
+in $t^* = \sigma\sqrt{m/\varepsilon}$.
+
+### 1. The Lennard-Jones potential and force
+
+Two particles at distance $r$ interact through
+
+$$
+V(r) = 4\varepsilon\left[\left(\frac{\sigma}{r}\right)^{12} - \left(\frac{\sigma}{r}\right)^{6}\right]
+$$
+
+The $r^{-12}$ term is short-range repulsion (electron clouds overlapping) and the $r^{-6}$ term is the van der
+Waals attraction. The minimum is at $r = 2^{1/6}\sigma \approx 1.12\sigma$, where the force is zero (checked in
+the tests).
+
+The force on particle $i$ from particle $j$ is $\mathbf{F}_{ij} = -\nabla_i V$. Writing
+$\mathbf{r}_{ij} = \mathbf{r}_i - \mathbf{r}_j$:
+
+$$
+\mathbf{F}_{ij} = \frac{F(r)}{r}\,\mathbf{r}_{ij}, \qquad
+\frac{F(r)}{r} = \frac{24\varepsilon}{r^2}\left[2\left(\frac{\sigma}{r}\right)^{12} - \left(\frac{\sigma}{r}\right)^{6}\right]
+$$
+
+**Why the code works with $r^2$:** everything above depends only on even powers of $r$, so the kernel
+computes $1/r^2$, then $(\sigma/r)^6 = (\sigma^2/r^2)^3$ and $(\sigma/r)^{12} = \left((\sigma/r)^6\right)^2$,
+and never takes a square root. Newton's third law, $\mathbf{F}_{ji} = -\mathbf{F}_{ij}$, means each pair is
+computed once and applied to both particles.
+
+### 2. Truncating and shifting the potential
+
+$V(r)$ never reaches zero, but beyond about $2.5\sigma$ it is tiny, so pairs farther apart than a cutoff
+$r_c$ are ignored. Cutting it off abruptly would make the energy jump every time a pair crosses $r_c$, so the
+potential is also shifted:
+
+$$
+V_s(r) = \begin{cases} V(r) - V(r_c) & r < r_c \\ 0 & r \ge r_c \end{cases}
+$$
+
+The shift is a constant, so it **doesn't change the force**: the dynamics are those of the truncated
+potential, and only the reported energy changes. The force still jumps from $F(r_c)$ to zero at the cutoff
+($|F(2.5\sigma)| = 0.039$, $|F(3.5\sigma)| = 0.0037$). That jump is what makes the energy error deviate from
+$\Delta t^2$ at small timesteps (see Benchmarks).
+
+### 3. Periodic boundary conditions
+
+A real liquid sample has about $10^{23}$ particles; this one has hundreds to thousands. To avoid walls, the
+cubic box of side $L$ is surrounded by infinitely many copies of itself, and a particle leaving one face
+re-enters through the opposite one. Two operations implement this:
+
+$$
+x \leftarrow x - L\left\lfloor \frac{x}{L} \right\rfloor
+\qquad\text{(wrap a coordinate into } [0, L)\text{)}
+$$
+
+$$
+\Delta x \leftarrow \Delta x - L\,\operatorname{round}\!\left(\frac{\Delta x}{L}\right)
+\qquad\text{(minimum image: the nearest periodic copy)}
+$$
+
+The minimum image is only correct if each particle interacts with at most one copy of any other, which needs
+$r_c < L/2$. The code checks this and throws an error otherwise. It stores $1/L$ so that each pair needs a
+multiplication rather than a division.
+
+### 4. Velocity Verlet integration
+
+Newton's equations $m\ddot{\mathbf{r}}_i = \mathbf{F}_i$ are advanced by a timestep $\Delta t$ in three stages:
+
+$$
+\begin{aligned}
+\mathbf{v}_i\!\left(t + \tfrac{\Delta t}{2}\right) &= \mathbf{v}_i(t) + \frac{\Delta t}{2m_i}\mathbf{F}_i(t) \\
+\mathbf{r}_i(t + \Delta t) &= \mathbf{r}_i(t) + \Delta t\,\mathbf{v}_i\!\left(t + \tfrac{\Delta t}{2}\right) \\
+\mathbf{v}_i(t + \Delta t) &= \mathbf{v}_i\!\left(t + \tfrac{\Delta t}{2}\right) + \frac{\Delta t}{2m_i}\mathbf{F}_i(t + \Delta t)
+\end{aligned}
+$$
+
+**Why this integrator:**
+
+- **Time-reversible.** Running forward, flipping all velocities and running the same number of steps returns
+  every particle to its start. The test suite checks this to within $10^{-8}$.
+- **Symplectic.** It exactly conserves a slightly perturbed "shadow" Hamiltonian
+  $\tilde{H} = H + O(\Delta t^2)$. So the true energy fluctuates with amplitude $\propto \Delta t^2$ but
+  **doesn't drift**, even over millions of steps. A simpler non-symplectic method, such as forward Euler,
+  gains energy steadily.
+- **Cheap.** One force evaluation per step, the expensive part.
+
+### 5. Cell lists and Verlet neighbour lists
+
+Checking all $N(N-1)/2$ pairs costs $O(N^2)$. But each particle only interacts with the
+$\approx \tfrac{4}{3}\pi r_c^3 \rho$ particles within $r_c$, a number independent of $N$.
+
+**Cell list.** The box is divided into cubic cells at least $r_l$ wide, and particles are binned into them
+with a counting sort, which is $O(N)$. Every neighbour within $r_l$ is then in the particle's own cell or one
+of its 26 neighbours. That examines $27\rho\ell^3 \ge 27\rho r_l^3$ candidates, of which only
+$\tfrac{4}{3}\pi\rho r_l^3$ are real neighbours: an efficiency of $4\pi/81 \approx 16\%$.
+
+**Verlet list.** So the cells are used only to *build* a per-particle neighbour list with a slightly larger
+radius $r_l = r_c + s$, where $s$ is the skin. That list is reused for many steps and rebuilt only when
+
+$$
+\max_i \left|\mathbf{r}_i - \mathbf{r}_i^{\text{build}}\right| > \frac{s}{2}
+$$
+
+**Why $s/2$ is safe:** a pair missing from the list was more than $r_c + s$ apart at the build. To come within
+$r_c$, their separation must shrink by more than $s$. If neither particle has moved more than $s/2$, it can
+have shrunk by at most $s$, so no interacting pair is missed. The skin trades rebuild frequency against the
+extra pairs carried every step (see the skin sweep).
+
+### 6. Temperature, pressure and energy
+
+**Temperature** comes from equipartition. Each degree of freedom carries $\tfrac{1}{2}k_BT$ of kinetic
+energy, and total momentum is conserved, which removes 3 of the $3N$:
+
+$$
+K = \sum_i \tfrac{1}{2} m_i v_i^2 = \frac{N_f}{2}k_BT, \qquad N_f = 3N - 3
+$$
+
+**Pressure** comes from the virial theorem. The kinetic part is the ideal-gas pressure; the virial
+$W = \sum_{i<j}\mathbf{r}_{ij}\cdot\mathbf{F}_{ij} = \sum_{i<j} \frac{F(r_{ij})}{r_{ij}}\,r_{ij}^2$ adds the
+effect of the forces:
+
+$$
+P = \frac{2K + W}{3V}
+$$
+
+**Tail corrections.** Comparing with reference data needs the contribution of pairs beyond $r_c$. Assuming the
+fluid is uniform there ($g(r) = 1$ for $r > r_c$) and integrating $V(r)$ and $rF(r)$ over that region gives,
+per particle:
+
+$$
+\frac{U_{\text{tail}}}{N} = \frac{8}{3}\pi\rho\varepsilon\sigma^3\left[\frac{1}{3}\left(\frac{\sigma}{r_c}\right)^9 - \left(\frac{\sigma}{r_c}\right)^3\right],
+\qquad
+P_{\text{tail}} = \frac{16}{3}\pi\rho^2\varepsilon\sigma^3\left[\frac{2}{3}\left(\frac{\sigma}{r_c}\right)^9 - \left(\frac{\sigma}{r_c}\right)^3\right]
+$$
+
+The reference data uses the *unshifted* truncated energy. With $n_c$ pairs inside the cutoff, which every force
+calculation counts, the conversion is exact:
+
+$$
+U_{\text{truncated}} = U_{\text{shifted}} + n_c\,V(r_c)
+$$
+
+**Radial distribution function.** $g(r)$ compares the number of pairs at distance $r$ with what an ideal gas
+at the same density would have. For a histogram bin $[r_1, r_2)$ averaged over $M$ samples:
+
+$$
+g(r) = \frac{n_{\text{pairs}}(r_1, r_2)}{M \cdot \tfrac{N}{2} \cdot \rho \cdot \tfrac{4}{3}\pi\left(r_2^3 - r_1^3\right)}
+$$
+
+The $N/2$ is there because the half neighbour list counts each pair once. An ideal gas gives $g = 1$ at every
+$r$, which is a test.
+
+### 7. Initial conditions and thermostats
+
+**Lattice.** Particles start on a face-centred cubic lattice: 4 per cubic unit cell, so $N = 4n^3$ and the
+lattice constant is $a = (4/\rho)^{1/3}$. The minimum distance is $a/\sqrt{2}$, which avoids the huge
+repulsive forces random placement would create.
+
+**Velocities.** Each component is drawn from the Maxwell-Boltzmann distribution, a Gaussian with variance
+$k_BT/m$. The centre-of-mass velocity is then subtracted, so the box doesn't drift, and all velocities are
+scaled by $\lambda = \sqrt{T_0/T}$ to hit the target exactly.
+
+**Equilibration thermostat.** The same rescaling, every 10 steps, while the lattice melts. It pins the kinetic
+energy, which suppresses its natural fluctuations, so it is only used to reach equilibrium.
+
+**Bussi stochastic velocity rescaling (NVT production).** In the canonical ensemble the kinetic energy
+fluctuates, with distribution $P(K) \propto K^{N_f/2 - 1} e^{-K/k_BT}$. Each step, the Bussi thermostat
+relaxes $K$ towards its target $\bar{K} = \tfrac{N_f}{2}k_BT$ with time constant $\tau$, plus a random kick
+sized so that exactly this distribution is sampled:
+
+$$
+K' = K + (1 - c)\left[\frac{\bar{K}}{N_f}\left(R_1^2 + \sum_{i=2}^{N_f} R_i^2\right) - K\right]
++ 2R_1\sqrt{\frac{c(1 - c)\,K\bar{K}}{N_f}}, \qquad c = e^{-\Delta t/\tau}
+$$
+
+Here the $R_i$ are independent standard Gaussians. The sum of $N_f - 1$ squared Gaussians is drawn directly
+as one chi-squared variable. All velocities are then scaled by $\sqrt{K'/K}$. The test suite checks the
+result: mean temperature at the target, and $\operatorname{Var}(K) = \tfrac{N_f}{2}(k_BT)^2$.
+
+### 8. Floating point and reproducibility
+
+Floating-point addition is not associative. For example, $(10^{16} + 1) - 10^{16} = 0$ but
+$(10^{16} - 10^{16}) + 1 = 1$. An OpenMP `reduction(+)` combines per-thread partial sums in an unspecified
+order, so the same input can give results that differ in the last bit.
+
+MD is chaotic: a small difference grows as $\delta(t) \approx \delta_0\,e^{\lambda t}$, where $\lambda$ is the
+largest Lyapunov exponent. Starting from $\delta_0 \sim 10^{-16}$, two runs become completely different
+trajectories within tens of time units. Statistical averages are unaffected, but bit-for-bit
+reproducibility is lost. Hence the fixed-order sums (`deterministicSum`), and the deterministic force mode
+in which each particle adds its pair forces in an order fixed by the neighbour list.
+
+**Mixed precision.** A float carries about 7 significant digits ($2^{-24} \approx 6\times10^{-8}$ relative).
+Positions up to $L \approx 25\sigma$ in float would only be accurate to about $10^{-6}\sigma$. So positions and
+the minimum image stay double, and only the separations, which are at most $r_l \approx 2.7\sigma$, are
+narrowed to float, for an absolute error of about $10^{-7}\sigma$.
+
+### 9. Statistics: error bars for correlated data
+
+Successive MD samples are correlated, so the naive standard error $s/\sqrt{n}$ is too small. With an
+integrated correlation time $\tau_{\text{int}}$, measured in samples:
+
+$$
+\operatorname{Var}(\bar{x}) \approx \frac{s^2}{n}\cdot 2\tau_{\text{int}}
+$$
+
+**Block averaging** splits the run into $M$ blocks longer than the correlation time. Their means are then
+independent, so $\mathrm{SE} = s_{\text{blocks}}/\sqrt{M}$. This is only trustworthy if the estimate levels
+off as the blocks grow. Here it didn't (see the blocking plot), so the validation uses **independent
+replicas** instead: $R$ runs with different seeds, with $\mathrm{SE} = s_R/\sqrt{R}$.
+
+Each comparison with reference data is a z-score, and the overall agreement is a χ² sum:
+
+$$
+z = \frac{x - x_{\text{ref}}}{\sqrt{\sigma_x^2 + \sigma_{\text{ref}}^2}}, \qquad \chi^2 = \sum_k z_k^2
+$$
+
+If the only differences are statistical, each $z \sim \mathcal{N}(0, 1)$, and $\chi^2$ over 20 comparisons has
+mean 20 and standard deviation $\sqrt{40} \approx 6.3$. The measured value is 17.2.
+
+**Energy error scaling.** Following §4, the relative energy fluctuation should scale as
+$\Delta t^2$: a straight line of slope 2 on log-log axes. The timestep benchmark measures that slope.
+
 ## Build and run
 
 Requires CMake ≥ 3.16 and a C++20 compiler. 
