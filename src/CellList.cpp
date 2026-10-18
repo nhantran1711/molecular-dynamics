@@ -51,4 +51,33 @@ void CellList::build(const System& system) {
     }
 }
 
+// The 3x3x3 block of cells around the given cell, wrapping across the periodic boundaries
+std::array<int, 27> CellList::neighbourCells(int cell) const {
+    
+    // Convert the linear cell index to 3D coordinates (cx, cy, cz) in the grid of cells
+    const int n = cellsPerSide_;
+    const int cx = cell / (n * n);
+    const int cy = (cell / n) % n;
+    const int cz = cell % n;
 
+    std::array<int, 27> neighbours {};
+
+    int idx = 0;
+
+    // Loop over the 3x3x3 block of cells around the given cell, wrapping across periodic boundaries
+    for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dz = -1; dz <= 1; ++dz) {
+
+                // Wrap the coordinates around the periodic boundaries using modulo arithmetic
+                int x = (cx + dx + n) % n;
+                int y = (cy + dy + n) % n;
+                int z = (cz + dz + n) % n;
+
+                // Compute the linear index of the neighbouring cell and store it in the neighbours array
+                neighbours[idx++] = (x * n + y) * n + z;
+            }
+        }
+    }
+    return neighbours;
+}
