@@ -34,6 +34,11 @@ public:
         return {cellParticles_.data() + cellStart_[cell], cellStart_[cell + 1] - cellStart_[cell]};
     };
 
+    // Every particle index, ordered cell by cell
+    std::span<const std::size_t> sortedOrder() const {
+        return cellParticles_;
+    };
+
 private:
     double minCellSize_;
     int cellsPerSide_ {0};
