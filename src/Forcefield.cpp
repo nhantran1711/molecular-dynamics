@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 #include "Forcefield.hpp"
 #include "Parallel.hpp"
 
@@ -92,33 +93,77 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
         std::array<double, 3>* forces = threadForces_.data() + threadId() * n;
         std::fill(forces, forces + n, std::array<double, 3> {0.0, 0.0, 0.0});
 
+        // Per-thread scratch for one particle's neighbours, one array per component (struct of arrays) so the
+        // compute loop below reads and writes contiguous doubles
+        std::vector<double> xj, yj, zj, fxj, fyj, fzj;
+
+        const double boxLength = system.getBoxLength();
+        const double inverseBoxLength = system.getInverseBoxLength();
+
         // Implicit barrier at the end, so all threads finish before any sums are taken
         #pragma omp for schedule(static)
         for (std::size_t i = 0; i < n; ++i) {
-            // Accumulate particle i's force in registers, writing it to memory once
-            std::array<double, 3> force_i {0.0, 0.0, 0.0};
+            const auto neighbours = neighbourList.neighboursOf(i);
+            const std::size_t m = neighbours.size();
 
-            for (std::size_t j : neighbourList.neighboursOf(i)) {
-                std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
-
-                double r2 = dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2];
-                if (r2 >= cut_off_squared_) {
-                    continue;
+            if (xj.size() < m) {
+                for (auto* buffer : {&xj, &yj, &zj, &fxj, &fyj, &fzj}) {
+                    buffer->resize(m);
                 }
+            }
 
+            // Gather: copy neighbour positions into contiguous arrays. Scalar loads, since NEON has no gather
+            for (std::size_t k = 0; k < m; ++k) {
+                const auto& r = particles[neighbours[k]].position;
+                xj[k] = r[0];
+                yj[k] = r[1];
+                zj[k] = r[2];
+            }
+
+            // Compute: the pair maths, vectorised across neighbours. Branch-free, since SIMD lanes can't take
+            // different branches: pairs beyond the cutoff (still in the list thanks to the skin) are computed
+            // anyway and masked to zero
+            const auto& ri = particles[i].position;
+            double fix = 0.0, fiy = 0.0, fiz = 0.0, energy_i = 0.0;
+
+            #pragma omp simd reduction(+:fix, fiy, fiz, energy_i)
+            for (std::size_t k = 0; k < m; ++k) {
+                // Minimum image convention, as in System::minimumImageDistance
+                double dx = ri[0] - xj[k];
+                double dy = ri[1] - yj[k];
+                double dz = ri[2] - zj[k];
+                dx -= boxLength * std::round(dx * inverseBoxLength);
+                dy -= boxLength * std::round(dy * inverseBoxLength);
+                dz -= boxLength * std::round(dz * inverseBoxLength);
+
+                double r2 = dx * dx + dy * dy + dz * dz;
                 auto [f_over_r, energy] = pairTerms(r2);
 
-                // Newton's third law: equal and opposite force on each particle
-                for (int k = 0; k < 3; ++k) {
-                    force_i[k] += f_over_r * dr[k];
-                    forces[j][k] -= f_over_r * dr[k];
-                }
-                potential += energy;
+                const bool inside = r2 < cut_off_squared_;
+                f_over_r = inside ? f_over_r : 0.0;
+                energy_i += inside ? energy : 0.0;
+
+                // Newton's third law: + on particle i here, - on particle j in the scatter below
+                fix += f_over_r * dx;
+                fiy += f_over_r * dy;
+                fiz += f_over_r * dz;
+                fxj[k] = f_over_r * dx;
+                fyj[k] = f_over_r * dy;
+                fzj[k] = f_over_r * dz;
             }
 
-            for (int k = 0; k < 3; ++k) {
-                forces[i][k] += force_i[k];
+            // Scatter: equal and opposite forces on the neighbours. Scalar stores, since NEON has no scatter
+            for (std::size_t k = 0; k < m; ++k) {
+                auto& f = forces[neighbours[k]];
+                f[0] -= fxj[k];
+                f[1] -= fyj[k];
+                f[2] -= fzj[k];
             }
+
+            forces[i][0] += fix;
+            forces[i][1] += fiy;
+            forces[i][2] += fiz;
+            potential += energy_i;
         }
 
         // Sum every thread's contribution for each particle. Each thread owns distinct particles, so no races
