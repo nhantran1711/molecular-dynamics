@@ -1,3 +1,4 @@
+#include "CommandLine.hpp"
 #include "Forcefield.hpp"
 #include "Initialisation.hpp"
 #include "Integrator.hpp"
@@ -16,8 +17,8 @@
 #include <string_view>
 #include <vector>
 
-// This file contains the main function for the molecular dynamics simulation program. 
-// It sets up the simulation parameters, initialises the system, and runs the simulation loop. 
+// This file contains the main function for the molecular dynamics simulation program.
+// It sets up the simulation parameters, initialises the system, and runs the simulation loop.
 // The program can be run with various command line options to customise the simulation.
 
 namespace {
@@ -53,9 +54,7 @@ struct App {
     double lastY {0.0};
 
     explicit App(int cells)
-        : cellsPerSide(cells),
-          latticeConstant(std::cbrt(4.0 / density)),
-          boxLength(cells * latticeConstant),
+        : cellsPerSide(cells), latticeConstant(std::cbrt(4.0 / density)), boxLength(cells * latticeConstant),
           system(createFCCLattice(cells, latticeConstant), boxLength) {
         reset();
         const float centre = static_cast<float>(0.5 * boxLength);
@@ -85,7 +84,7 @@ struct App {
 
 // Save the frame just drawn (before the buffer swap) as a binary PPM image
 bool saveScreenshot(const char* path, int width, int height) {
-    std::vector<unsigned char> pixels(static_cast<std::size_t>(3 * width * height));
+    std::vector<unsigned char> pixels(3 * static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadBuffer(GL_BACK);
     glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
@@ -97,7 +96,8 @@ bool saveScreenshot(const char* path, int width, int height) {
     std::fprintf(file, "P6\n%d %d\n255\n", width, height);
     // OpenGL rows start at the bottom, image rows at the top
     for (int row = height - 1; row >= 0; --row) {
-        std::fwrite(pixels.data() + static_cast<std::size_t>(3 * width * row), 1, static_cast<std::size_t>(3 * width), file);
+        std::fwrite(pixels.data() + 3 * static_cast<std::size_t>(width) * static_cast<std::size_t>(row), 1,
+                    3 * static_cast<std::size_t>(width), file);
     }
     std::fclose(file);
     return true;
@@ -113,15 +113,34 @@ void onKey(GLFWwindow* window, int key, int, int action, int) {
     }
     App& a = app(window);
     switch (key) {
-        case GLFW_KEY_ESCAPE: glfwSetWindowShouldClose(window, GLFW_TRUE); break;
-        case GLFW_KEY_SPACE: a.paused = !a.paused; break;
-        case GLFW_KEY_UP: a.stepsPerFrame = std::min(a.stepsPerFrame + 1, 100); break;
-        case GLFW_KEY_DOWN: a.stepsPerFrame = std::max(a.stepsPerFrame - 1, 1); break;
-        case GLFW_KEY_H: a.targetTemperature *= 1.1; a.thermostat = true; break;
-        case GLFW_KEY_C: a.targetTemperature /= 1.1; a.thermostat = true; break;
-        case GLFW_KEY_T: a.thermostat = !a.thermostat; break;
-        case GLFW_KEY_R: a.reset(); break;
-        default: break;
+    case GLFW_KEY_ESCAPE:
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+        break;
+    case GLFW_KEY_SPACE:
+        a.paused = !a.paused;
+        break;
+    case GLFW_KEY_UP:
+        a.stepsPerFrame = std::min(a.stepsPerFrame + 1, 100);
+        break;
+    case GLFW_KEY_DOWN:
+        a.stepsPerFrame = std::max(a.stepsPerFrame - 1, 1);
+        break;
+    case GLFW_KEY_H:
+        a.targetTemperature *= 1.1;
+        a.thermostat = true;
+        break;
+    case GLFW_KEY_C:
+        a.targetTemperature /= 1.1;
+        a.thermostat = true;
+        break;
+    case GLFW_KEY_T:
+        a.thermostat = !a.thermostat;
+        break;
+    case GLFW_KEY_R:
+        a.reset();
+        break;
+    default:
+        break;
     }
 }
 
@@ -147,10 +166,11 @@ void onScroll(GLFWwindow* window, double, double yOffset) {
     App& a = app(window);
     const float minDistance = 0.2f * static_cast<float>(a.boxLength);
     const float maxDistance = 10.0f * static_cast<float>(a.boxLength);
-    a.camera.distance = std::clamp(a.camera.distance * std::pow(0.9f, static_cast<float>(yOffset)), minDistance, maxDistance);
+    a.camera.distance =
+        std::clamp(a.camera.distance * std::pow(0.9f, static_cast<float>(yOffset)), minDistance, maxDistance);
 }
 
-}
+} // namespace
 
 int main(int argc, char** argv) {
     int cellsPerSide = 8;
@@ -162,9 +182,13 @@ int main(int argc, char** argv) {
         if (arg == "--screenshot" && i + 1 < argc) {
             screenshotPath = argv[++i];
         } else if (arg == "--frames" && i + 1 < argc) {
-            screenshotFrames = std::atoi(argv[++i]);
+            if (!parseNumber(argv[++i], screenshotFrames)) {
+                screenshotFrames = 0; // rejected below
+            }
         } else {
-            cellsPerSide = std::atoi(argv[i]);
+            if (!parseNumber(argv[i], cellsPerSide)) {
+                cellsPerSide = 0; // rejected below
+            }
         }
     }
     if (cellsPerSide < 2 || screenshotFrames < 1) {
@@ -205,7 +229,8 @@ int main(int argc, char** argv) {
         glfwSetScrollCallback(window, onScroll);
 
         std::printf("N = %zu. Drag to orbit, scroll to zoom, Space pause, Up/Down steps per frame,\n"
-                    "H heat / C cool, T thermostat on/off, R reset, Esc quit\n", a.system.getParticles().size());
+                    "H heat / C cool, T thermostat on/off, R reset, Esc quit\n",
+                    a.system.size());
 
         // Speed colours are fixed to the starting temperature, so heating visibly brightens the particles
         const double referenceSpeed = std::sqrt(3.0 * initialTemperature);
@@ -239,13 +264,14 @@ int main(int argc, char** argv) {
             ++frames;
             const double now = glfwGetTime();
             if (now - lastTitle > 0.25) {
-                const double n = static_cast<double>(a.system.getParticles().size());
+                const double n = static_cast<double>(a.system.size());
                 char title[256];
                 std::snprintf(title, sizeof(title),
-                    "md_vis | N = %zu | T = %.3f (target %.3f, thermostat %s) | E/N = %.3f | %d steps/frame | %.0f fps%s",
-                    a.system.getParticles().size(), a.system.temperature(), a.targetTemperature,
-                    a.thermostat ? "on" : "off", (a.system.kineticEnergy() + a.potential) / n, a.stepsPerFrame,
-                    frames / (now - lastTitle), a.paused ? " | paused" : "");
+                              "md_vis | N = %zu | T = %.3f (target %.3f, thermostat %s) | E/N = %.3f | %d steps/frame "
+                              "| %.0f fps%s",
+                              a.system.size(), a.system.temperature(), a.targetTemperature, a.thermostat ? "on" : "off",
+                              (a.system.kineticEnergy() + a.potential) / n, a.stepsPerFrame, frames / (now - lastTitle),
+                              a.paused ? " | paused" : "");
                 glfwSetWindowTitle(window, title);
                 lastTitle = now;
                 frames = 0;
