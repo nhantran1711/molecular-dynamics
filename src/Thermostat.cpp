@@ -1,6 +1,18 @@
 #include "Thermostat.hpp"
 #include <cmath>
 
+namespace {
+
+void scaleVelocities(System& system, double scale) {
+    for (int k = 0; k < 3; ++k) {
+        for (double& v : system.velocity(k)) {
+            v *= scale;
+        }
+    }
+}
+
+} // namespace
+
 // Rescale the velocities of all particles in the system to achieve the target temperature
 void rescaleVelocities(System& system, double targetTemperature) {
     // Calculate the current temperature of the system
@@ -14,16 +26,12 @@ void rescaleVelocities(System& system, double targetTemperature) {
     // Calculate the scaling factor to achieve the target temperature
     double scale = std::sqrt(targetTemperature / current);
 
-    // Rescale the velocities of all particles in the system
-    for (auto& particle : system.getParticles()) {
-        for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] *= scale;
-        }
-    }
+    scaleVelocities(system, scale);
 }
 
 BussiThermostat::BussiThermostat(double temperature, double tau, std::uint64_t seed)
-    : temperature_(temperature), tau_(tau), rng_(seed) {}
+    : temperature_(temperature), tau_(tau), rng_(seed) {
+}
 
 void BussiThermostat::apply(System& system, double dt) {
     const double kinetic = system.kineticEnergy();
@@ -32,7 +40,7 @@ void BussiThermostat::apply(System& system, double dt) {
     }
 
     // Degrees of freedom, with 3 removed for the conserved total momentum
-    const double dof = 3.0 * static_cast<double>(system.getParticles().size()) - 3.0;
+    const double dof = 3.0 * static_cast<double>(system.size()) - 3.0;
     const double target = 0.5 * dof * temperature_;
     const double c = std::exp(-dt / tau_);
 
@@ -43,13 +51,8 @@ void BussiThermostat::apply(System& system, double dt) {
     const double sumSquares = gamma(rng_);
 
     // New kinetic energy (equation A7 of the paper)
-    const double newKinetic = kinetic + (1.0 - c) * (target * (sumSquares + r1 * r1) / dof - kinetic)
-        + 2.0 * r1 * std::sqrt(target / dof * kinetic * (1.0 - c) * c);
+    const double newKinetic = kinetic + (1.0 - c) * (target * (sumSquares + r1 * r1) / dof - kinetic) +
+                              2.0 * r1 * std::sqrt(target / dof * kinetic * (1.0 - c) * c);
 
-    const double scale = std::sqrt(newKinetic / kinetic);
-    for (auto& particle : system.getParticles()) {
-        for (int k = 0; k < 3; ++k) {
-            particle.velocity[k] *= scale;
-        }
-    }
+    scaleVelocities(system, std::sqrt(newKinetic / kinetic));
 }
