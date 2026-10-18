@@ -31,7 +31,9 @@ void System::wrapPosition(std::array<double, 3>& r) const {
 double System::kineticEnergy() const {
     double kinetic = 0.0;
 
-    for (const auto& particle: particles_) {
+    #pragma omp parallel for reduction(+:kinetic) schedule(static)
+    for (std::size_t i = 0; i < particles_.size(); ++i) {
+        const Particle& particle = particles_[i];
         double v2 = particle.velocity[0] * particle.velocity[0] + particle.velocity[1] * particle.velocity[1] + particle.velocity[2] * particle.velocity[2];
         kinetic += 0.5 * particle.mass * v2;
     }
