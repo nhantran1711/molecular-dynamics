@@ -3,3 +3,6 @@
 /build
 /.cache
 bench/results/
+
+
+__pycache__
