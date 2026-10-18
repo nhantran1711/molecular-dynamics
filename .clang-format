@@ -1,0 +1,19 @@
+# Matches the existing style: 4-space indent, 120 columns, attached braces. Needs clang-format >= 23 (pinned
+# in CI) for IndentPPDirectives: Leave, which keeps #pragma omp lines indented with the code they annotate
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 4
+SpaceBeforeCpp11BracedList: true
+Cpp11BracedListStyle: true
+SortIncludes: Never
+IndentPPDirectives: Leave
+ReflowComments: false
