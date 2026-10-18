@@ -2,23 +2,17 @@
 #include "Parallel.hpp"
 #include <stdexcept>
 
-
 NeighbourList::NeighbourList(double cutOff, double skin, bool reverseIndex)
-    : listRadius_(cutOff + skin),
-      listRadiusSquared_((cutOff + skin) * (cutOff + skin)),
-      maxDisplacementSquared_(0.25 * skin * skin),
-      reverseIndex_(reverseIndex),
-      cells_(cutOff + skin) {}
+    : listRadius_(cutOff + skin), listRadiusSquared_((cutOff + skin) * (cutOff + skin)),
+      maxDisplacementSquared_(0.25 * skin * skin), reverseIndex_(reverseIndex), cells_(cutOff + skin) {
+}
 
 // Rebuild only if a particle has moved more than skin / 2 since the last build. Returns true if rebuilt.
 bool NeighbourList::update(System& system) {
 
-    // Get a reference to the particles in the system
-    const auto& particles = system.getParticles();
-
-
     // If the number of particles has changed since the last build, we must rebuild the neighbour list
-    if (referencePositions_.size() != particles.size()) {
+    const std::size_t n = system.size();
+    if (referencePositions_.size() != n) {
         build(system);
         return true;
     }
@@ -27,12 +21,11 @@ bool NeighbourList::update(System& system) {
     // An OR reduction instead of an early return, since OpenMP loops can't break out early
     bool stale = false;
 
-
     // Parallel loop to check if any particle has moved more than skin / 2 since the last build
-    #pragma omp parallel for reduction(||:stale) schedule(static)
-    for (std::size_t i = 0; i < particles.size(); ++i) {
+    #pragma omp parallel for reduction(|| : stale) schedule(static)
+    for (std::size_t i = 0; i < n; ++i) {
         // Minimum image, since a particle may have wrapped across the box since the last build
-        std::array<double, 3> d = system.minimumImageDistance(particles[i].position, referencePositions_[i]);
+        std::array<double, 3> d = system.minimumImageDistance(system.positionOf(i), referencePositions_[i]);
         stale = stale || (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > maxDisplacementSquared_);
     }
 
@@ -65,9 +58,7 @@ void NeighbourList::build(System& system) {
         throw std::runtime_error("Cutoff + skin must be less than half the box length");
     }
 
-    // Get a reference to the particles in the system
-    const auto& particles = system.getParticles();
-    const std::size_t n = particles.size();
+    const std::size_t n = system.size();
 
     // Build the cell list for the current particle positions
     cells_.build(system);
@@ -97,7 +88,7 @@ void NeighbourList::build(System& system) {
                 if (j <= i) {
                     return;
                 }
-                std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
+                std::array<double, 3> dr = system.minimumImageDistance(i, j);
                 if (dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2] < listRadiusSquared_) {
                     local.push_back(j);
                 }
@@ -137,7 +128,7 @@ void NeighbourList::build(System& system) {
 
     referencePositions_.resize(n);
     for (std::size_t i = 0; i < n; ++i) {
-        referencePositions_[i] = particles[i].position;
+        referencePositions_[i] = system.positionOf(i);
     }
     ++rebuildCount_;
 }

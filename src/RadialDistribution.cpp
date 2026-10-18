@@ -4,17 +4,18 @@
 #include <numbers>
 
 RadialDistribution::RadialDistribution(double rMax, int bins)
-    : rMax_(rMax), binWidth_(rMax / bins), histogram_(static_cast<std::size_t>(bins), 0.0) {}
+    : rMax_(rMax), binWidth_(rMax / bins), histogram_(static_cast<std::size_t>(bins), 0.0) {
+}
 
-    // Reset the histogram and sample count to start a new calculation of g(r)
+// Reset the histogram and sample count to start a new calculation of g(r)
 void RadialDistribution::sample(const System& system, const NeighbourList& neighbourList) {
-    const auto& particles = system.getParticles();
+    const std::size_t n = system.size();
     const double rMax2 = rMax_ * rMax_;
 
     // Half list: each pair is counted once
-    for (std::size_t i = 0; i < particles.size(); ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j : neighbourList.neighboursOf(i)) {
-            auto dr = system.minimumImageDistance(particles[i].position, particles[j].position);
+            auto dr = system.minimumImageDistance(i, j);
             double r2 = dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2];
             if (r2 < rMax2) {
                 histogram_[static_cast<std::size_t>(std::sqrt(r2) / binWidth_)] += 1.0;
@@ -23,7 +24,7 @@ void RadialDistribution::sample(const System& system, const NeighbourList& neigh
     }
 
     const double volume = std::pow(system.getBoxLength(), 3);
-    particles_ = static_cast<double>(particles.size());
+    particles_ = static_cast<double>(n);
     density_ = particles_ / volume;
     ++samples_;
 }
