@@ -29,11 +29,12 @@ struct Options {
     int productionSteps = 5000;
     const char* csvPath = nullptr;     // per-step energies and temperature, for plotting
     bool quiet = false;                // only print the RESULT line
+    bool deterministic = false;        // bitwise-identical results for any thread count
 };
 
 void printUsage() {
     std::fprintf(stderr,
-        "Usage: md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--csv PATH] [--quiet]\n");
+        "Usage: md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--steps N] [--csv PATH] [--deterministic] [--quiet]\n");
 }
 
 // Parse command line arguments, returning false on anything unrecognised
@@ -46,6 +47,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.useNeighbourList = false;
         } else if (arg == "--quiet") {
             options.quiet = true;
+        } else if (arg == "--deterministic") {
+            options.deterministic = true;
         } else if (arg == "--dt" && hasValue) {
             options.dt = std::atof(argv[++a]);
         } else if (arg == "--skin" && hasValue) {
@@ -113,7 +116,8 @@ int main(int argc, char** argv) {
     // Create the force field and integrator
     LennardJonesForceField forceField(1.0, 1.0, cutOff);
     VelocityVerletIntegrator integrator(dt);
-    NeighbourList neighbourList(cutOff, skin);
+    NeighbourList neighbourList(cutOff, skin, options.deterministic);
+    forceField.setDeterministic(options.deterministic);
 
     // Advance one timestep with whichever force path was selected
     auto advance = [&]() {
@@ -228,8 +232,9 @@ int main(int argc, char** argv) {
     }
 
     // Machine-readable summary for the benchmark scripts
-    std::printf("RESULT n=%zu threads=%d forces=%s dt=%g steps=%d seconds=%.6f ms_per_step=%.6f mean_T=%.6f std_T=%.6f max_drift=%.6e skin=%g cutoff=%g rebuilds=%d\n",
+    std::printf("RESULT n=%zu threads=%d forces=%s dt=%g steps=%d seconds=%.6f ms_per_step=%.6f mean_T=%.6f std_T=%.6f max_drift=%.6e skin=%g cutoff=%g rebuilds=%d deterministic=%d state_hash=%016llx\n",
         system.getParticles().size(), threads, useNeighbourList ? "list" : "brute", dt, productionSteps,
-        seconds, 1000.0 * seconds / productionSteps, meanT, stdT, maxDrift, skin, cutOff, neighbourList.getRebuildCount());
+        seconds, 1000.0 * seconds / productionSteps, meanT, stdT, maxDrift, skin, cutOff, neighbourList.getRebuildCount(), options.deterministic ? 1 : 0,
+        static_cast<unsigned long long>(system.stateHash()));
     return 0;
 }
