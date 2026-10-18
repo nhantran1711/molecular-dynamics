@@ -3,6 +3,8 @@
 A molecular dynamics engine in C++20 that simulates a Lennard-Jones fluid with Velocity Verlet integration and periodic boundary conditions. Cell lists and Verlet neighbour lists make each step O(N) instead of O(N²), and OpenMP spreads the step across cores. 
 A benchmark suite measures energy conservation, temperature, stability and scaling.
 
+![md_vis: 2048 particles of Lennard-Jones liquid, coloured by speed](docs/visualiser.png)
+
 All quantities are in reduced Lennard-Jones units (ε = σ = m = k_B = 1).
 
 ## Features
@@ -14,6 +16,8 @@ All quantities are in reduced Lennard-Jones units (ε = σ = m = k_B = 1).
   only when some particle has moved more than half the skin
 - **OpenMP** parallel force calculation, neighbour list build, integration and reductions
 - **SIMD-vectorised force kernel** (`#pragma omp simd`, confirmed with compiler vectorisation reports)
+- **Real-time OpenGL visualiser** (`md_vis`): particles drawn as sphere-shaded point sprites coloured by
+  speed, with live temperature control to melt or freeze the system
 - Particles **re-sorted by cell** on every list rebuild, so spatial neighbours are neighbours in memory
 - **FCC lattice** initialisation with Maxwell-Boltzmann velocities, and a velocity-rescaling equilibration
   phase followed by NVE production
@@ -47,6 +51,27 @@ md_sim [cellsPerSide] [--brute] [--dt X] [--skin X] [--cutoff X] [--equil N] [--
 | `--quiet` | off | print only the machine-readable `RESULT` line |
 
 Set the thread count with `OMP_NUM_THREADS`.
+
+### Visualiser
+
+`md_vis` is built when GLFW is installed (`brew install glfw`, or `libglfw3-dev` on Linux). It needs
+OpenGL 4.1 and has only been tested on macOS.
+
+```bash
+./build/release/md_vis 8          # 4 × 8³ = 2048 particles
+```
+
+| Input | Action |
+|---|---|
+| drag / scroll | orbit / zoom |
+| Space | pause |
+| ↑ / ↓ | more / fewer steps per frame |
+| H / C | heat / cool by 10% (sets the thermostat target) |
+| T | thermostat on / off |
+| R | reset to the lattice |
+
+Temperature, energy and frame rate are shown in the window title. `--screenshot out.ppm [--frames N]`
+renders N frames off-screen, saves the last one and exits.
 
 ## Benchmarks
 
@@ -163,6 +188,9 @@ include/, src/
   Thermostat      velocity rescaling, used during equilibration only
   Parallel.hpp    OpenMP thread helpers with single-thread fallbacks
   main.cpp        command-line driver
+vis/
+  Renderer        OpenGL drawing: point-sprite spheres, box outline, orbit camera
+  main.cpp        md_vis window, input and live simulation loop
 bench/benchmark.py  benchmark runner and plots
 ```
 
