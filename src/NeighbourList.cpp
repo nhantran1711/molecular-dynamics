@@ -1,29 +1,7 @@
 #include "NeighbourList.hpp"
+#include "Parallel.hpp"
 #include <stdexcept>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-namespace {
-
-int threadCount() {
-#ifdef _OPENMP
-    return omp_get_num_threads();
-#else
-    return 1;
-#endif
-}
-
-int threadId() {
-#ifdef _OPENMP
-    return omp_get_thread_num();
-#else
-    return 0;
-#endif
-}
-
-}
 
 NeighbourList::NeighbourList(double cutOff, double skin)
     : listRadius_(cutOff + skin),
@@ -96,50 +74,46 @@ void NeighbourList::build(System& system) {
     cells_.build(system);
     const bool useCells = cells_.getCellsPerSide() >= 3;
 
-    // Pass 1 (parallel, with distance checks): find all pairs of particles within the list radius. Each thread keeps its own buffer of half-list pairs (i < j) to avoid races.
+    offsets_.assign(n + 1, 0);
+
+    // Pass 1 (parallel): each thread finds the j > i neighbours of its own particles, appending them to
+    // a private buffer and recording each particle's count. Distinct i per thread, so no races
     #pragma omp parallel
     {
         // single has an implicit barrier, so every thread sees the resized buffers
         #pragma omp single
-        threadPairs_.resize(threadCount());
+        threadNeighbours_.resize(threadCount());
 
-        auto& local = threadPairs_[threadId()];
+        auto& local = threadNeighbours_[threadId()];
         local.clear();
 
         #pragma omp for schedule(static)
         for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t before = local.size();
             forEachCandidate(i, n, useCells, [&](std::size_t j) {
                 if (j <= i) {
                     return;
                 }
                 std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
                 if (dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2] < listRadiusSquared_) {
-                    local.emplace_back(i, j);
+                    local.push_back(j);
                 }
             });
+            offsets_[i + 1] = local.size() - before;
         }
     }
 
-    // Pass 2 (serial): convert the half-list of pairs into a full list of neighbours for each particle, in compressed sparse row (CSR) format. This allows for efficient access to the neighbours of each particle.
-    offsets_.assign(n + 1, 0);
-    for (const auto& pairs : threadPairs_) {
-        for (auto [i, j] : pairs) {
-            ++offsets_[i + 1];
-            ++offsets_[j + 1];
-        }
-    }
-
+    // Pass 2 (serial, a plain copy): prefix sum the counts into CSR offsets, then concatenate the buffers.
+    // schedule(static) hands thread t the t-th contiguous block of i, so concatenating in thread order
+    // lines every particle's neighbours up with its offset
     for (std::size_t i = 0; i < n; ++i) {
         offsets_[i + 1] += offsets_[i];
     }
-    neighbours_.resize(offsets_[n]);
 
-    fill_.assign(offsets_.begin(), offsets_.end() - 1);
-    for (const auto& pairs : threadPairs_) {
-        for (auto [i, j] : pairs) {
-            neighbours_[fill_[i]++] = j;
-            neighbours_[fill_[j]++] = i;
-        }
+    neighbours_.clear();
+    neighbours_.reserve(offsets_[n]);
+    for (const auto& local : threadNeighbours_) {
+        neighbours_.insert(neighbours_.end(), local.begin(), local.end());
     }
 
     referencePositions_.resize(n);

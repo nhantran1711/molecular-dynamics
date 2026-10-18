@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include "Forcefield.hpp"
+#include "Parallel.hpp"
 
 LennardJonesForceField::LennardJonesForceField(double epsilon, double sigma, double cut_off)
     : epsilon_(epsilon), sigma_(sigma), cut_off_(cut_off), cut_off_squared_(cut_off * cut_off) {
@@ -78,28 +80,61 @@ double LennardJonesForceField::computeForces(System& system, const NeighbourList
 
     double potential = 0.0;
 
-    // Full neighbour list, so each thread writes only to particle i: no races, no atomics.
-    // Every pair is visited twice, so each visit contributes half the pair energy.
-    #pragma omp parallel for reduction(+:potential) schedule(static)
-    for (std::size_t i = 0; i < n; ++i) {
-        std::array<double, 3> force {0.0, 0.0, 0.0};
+    // Half neighbour list, so each pair is computed once and its force applied to both particles. Two threads
+    // can share a particle j, so each thread accumulates into its own force array, and the arrays are summed
+    // per particle at the end
+    #pragma omp parallel reduction(+:potential)
+    {
+        // single has an implicit barrier, so every thread sees the resized buffer
+        #pragma omp single
+        threadForces_.resize(threadCount() * n);
 
-        for (std::size_t j : neighbourList.neighboursOf(i)) {
-            std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
+        std::array<double, 3>* forces = threadForces_.data() + threadId() * n;
+        std::fill(forces, forces + n, std::array<double, 3> {0.0, 0.0, 0.0});
 
-            double r2 = dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2];
-            if (r2 >= cut_off_squared_) {
-                continue;
+        // Implicit barrier at the end, so all threads finish before any sums are taken
+        #pragma omp for schedule(static)
+        for (std::size_t i = 0; i < n; ++i) {
+            // Accumulate particle i's force in registers, writing it to memory once
+            std::array<double, 3> force_i {0.0, 0.0, 0.0};
+
+            for (std::size_t j : neighbourList.neighboursOf(i)) {
+                std::array<double, 3> dr = system.minimumImageDistance(particles[i].position, particles[j].position);
+
+                double r2 = dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2];
+                if (r2 >= cut_off_squared_) {
+                    continue;
+                }
+
+                auto [f_over_r, energy] = pairTerms(r2);
+
+                // Newton's third law: equal and opposite force on each particle
+                for (int k = 0; k < 3; ++k) {
+                    force_i[k] += f_over_r * dr[k];
+                    forces[j][k] -= f_over_r * dr[k];
+                }
+                potential += energy;
             }
-
-            auto [f_over_r, energy] = pairTerms(r2);
 
             for (int k = 0; k < 3; ++k) {
-                force[k] += f_over_r * dr[k];
+                forces[i][k] += force_i[k];
             }
-            potential += 0.5 * energy;
         }
-        particles[i].force = force;
+
+        // Sum every thread's contribution for each particle. Each thread owns distinct particles, so no races
+        const int nThreads = threadCount();
+
+        #pragma omp for schedule(static)
+        for (std::size_t i = 0; i < n; ++i) {
+            std::array<double, 3> total {0.0, 0.0, 0.0};
+            for (int t = 0; t < nThreads; ++t) {
+                const auto& f = threadForces_[t * n + i];
+                for (int k = 0; k < 3; ++k) {
+                    total[k] += f[k];
+                }
+            }
+            particles[i].force = total;
+        }
     }
     return potential;
 }
