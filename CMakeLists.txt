@@ -11,8 +11,8 @@ endif()
 
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
 
-add_executable(md_sim
-    src/main.cpp
+# Simulation engine, shared by the command-line driver and the visualiser
+add_library(md_core STATIC
     src/System.cpp
     src/Forcefield.cpp
     src/Integrator.cpp
@@ -22,8 +22,8 @@ add_executable(md_sim
     src/NeighbourList.cpp
 )
 
-target_include_directories(md_sim PRIVATE include)
-target_compile_options(md_sim PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(md_core PUBLIC include)
+target_compile_options(md_core PUBLIC -Wall -Wextra -Wpedantic)
 
 # Apple clang ships without an OpenMP runtime, so point CMake at Homebrew's libomp (brew install libomp)
 if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
@@ -38,9 +38,23 @@ endif()
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
-    target_link_libraries(md_sim PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(md_core PUBLIC OpenMP::OpenMP_CXX)
 else()
-    # Still builds, just serially: the pragmas are ignored
+    # Still builds, just serially: the thread pragmas are ignored, but -fopenmp-simd keeps the SIMD force kernel
     message(WARNING "OpenMP not found, building single-threaded")
-    target_compile_options(md_sim PRIVATE -Wno-unknown-pragmas)
+    target_compile_options(md_core PUBLIC -fopenmp-simd -Wno-unknown-pragmas)
+endif()
+
+add_executable(md_sim src/main.cpp)
+target_link_libraries(md_sim PRIVATE md_core)
+
+# Real-time OpenGL visualiser, built only when GLFW is available (brew install glfw / apt install libglfw3-dev)
+find_package(glfw3 3.3 CONFIG QUIET)
+find_package(OpenGL QUIET)
+if(glfw3_FOUND AND OpenGL_FOUND)
+    add_executable(md_vis vis/main.cpp vis/Renderer.cpp)
+    target_link_libraries(md_vis PRIVATE md_core glfw OpenGL::GL)
+    target_compile_definitions(md_vis PRIVATE GL_SILENCE_DEPRECATION)
+else()
+    message(STATUS "GLFW or OpenGL not found, skipping the md_vis visualiser")
 endif()
