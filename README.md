@@ -13,6 +13,7 @@ All quantities are in reduced Lennard-Jones units (ε = σ = m = k_B = 1).
 - **Cell lists** (counting sort into cells ≥ r_c + skin wide) used to build **Verlet neighbour lists**, rebuilt
   only when some particle has moved more than half the skin
 - **OpenMP** parallel force calculation, neighbour list build, integration and reductions
+- **SIMD-vectorised force kernel** (`#pragma omp simd`, confirmed with compiler vectorisation reports)
 - Particles **re-sorted by cell** on every list rebuild, so spatial neighbours are neighbours in memory
 - **FCC lattice** initialisation with Maxwell-Boltzmann velocities, and a velocity-rescaling equilibration
   phase followed by NVE production
@@ -62,17 +63,17 @@ python bench/benchmark.py --quick    # smoke test, seconds
 
 | N = 4000 | ms / step | vs all pairs |
 |---|---|---|
-| All pairs, 1 thread | 12.7 | 1× |
-| Neighbour list, 1 thread | 1.83 | **7.0×** |
-| Neighbour list, 4 threads | 0.72 | **17.7×** |
+| All pairs, 1 thread | 12.9 | 1× |
+| Neighbour list, 1 thread | 1.49 | **8.7×** |
+| Neighbour list, 4 threads | 0.60 | **21.6×** |
 
-From 256 to 32,000 particles, the neighbour-list cost grows as about N^1.08.
+From 256 to 32,000 particles, the neighbour-list cost grows as about N^1.07.
 
 ### OpenMP scaling
 
 ![OpenMP strong scaling](bench/plots/thread_scaling.png)
 
-The speedup at 4 threads is 2.5× for N = 4000 and 2.9× for N = 13,500. It levels off beyond 4 threads, as
+The speedup at 4 threads is 2.5× for N = 4000 and 2.4× for N = 13,500. It levels off beyond 4 threads, as
 expected on the M1: `schedule(static)` gives every thread an equal share, so once the slower efficiency cores
 join, the other threads wait for them.
 
@@ -121,6 +122,29 @@ arrays.
 **Parallel list build.** Each thread finds the neighbours of its own contiguous block of particles and
 appends them to a private buffer. A prefix sum over the per-particle counts gives the compact (CSR) offsets,
 and the buffers are concatenated in thread order.
+
+**SIMD force kernel.** The compiler would not vectorise the original pair loop: its cost model judged the
+`if (r2 >= rc²) continue` branch and the scattered writes to `forces[j]` too expensive. The kernel now
+handles each particle in three stages:
+
+1. **gather** the neighbours' positions into contiguous per-component arrays (scalar loads; ARM NEON has no
+   gather instruction);
+2. **compute** minimum image, r², the LJ terms and the cutoff mask in a branch-free `#pragma omp simd` loop.
+   Pairs beyond the cutoff (still in the list because of the skin) are computed and masked to zero;
+3. **scatter** the equal and opposite forces back to each `j` (scalar stores).
+
+Clang's `-Rpass=loop-vectorize` confirms that the compute loop is vectorised at width 2, the full NEON
+width for doubles. Measured at N = 4000 on one thread, from builds of identical source with SIMD on and off:
+
+| Kernel | ms / step | |
+|---|---|---|
+| Original scalar loop | 1.83 | |
+| Gather / compute / scatter, vectorisation off | 1.68 | 1.09× (branch-free, contiguous) |
+| Gather / compute / scatter, SIMD on | 1.46 | 1.15× from SIMD, **1.25× total** |
+
+This is far below the 2× ideal: NEON holds only 2 doubles, the gather and scatter stay scalar, and list
+rebuilds and integration aren't vectorised. A struct-of-arrays particle layout would remove the gather and
+scatter copies, and single precision (4 lanes) or AVX-512 on x86 (8 doubles) would give more.
 
 **Checking correctness.** The neighbour-list forces match the O(N²) reference to within 2×10⁻¹⁴, at several
 thread counts including uneven ones. Energy conservation acts as an end-to-end check: a race or a missed pair
