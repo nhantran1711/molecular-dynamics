@@ -3,10 +3,11 @@
 #include <stdexcept>
 
 
-NeighbourList::NeighbourList(double cutOff, double skin)
+NeighbourList::NeighbourList(double cutOff, double skin, bool reverseIndex)
     : listRadius_(cutOff + skin),
       listRadiusSquared_((cutOff + skin) * (cutOff + skin)),
       maxDisplacementSquared_(0.25 * skin * skin),
+      reverseIndex_(reverseIndex),
       cells_(cutOff + skin) {}
 
 // Rebuild only if a particle has moved more than skin / 2 since the last build. Returns true if rebuilt.
@@ -26,6 +27,8 @@ bool NeighbourList::update(System& system) {
     // An OR reduction instead of an early return, since OpenMP loops can't break out early
     bool stale = false;
 
+
+    // Parallel loop to check if any particle has moved more than skin / 2 since the last build
     #pragma omp parallel for reduction(||:stale) schedule(static)
     for (std::size_t i = 0; i < particles.size(); ++i) {
         // Minimum image, since a particle may have wrapped across the box since the last build
@@ -114,6 +117,22 @@ void NeighbourList::build(System& system) {
     neighbours_.reserve(offsets_[n]);
     for (const auto& local : threadNeighbours_) {
         neighbours_.insert(neighbours_.end(), local.begin(), local.end());
+    }
+
+    // If requested, build the reverse index, which records for every particle j the pairs in which it is the second particle. This is needed for deterministic forces, but not for the default mode, so it is off by default
+    if (reverseIndex_) {
+        reverseOffsets_.assign(n + 1, 0);
+        for (std::size_t j : neighbours_) {
+            ++reverseOffsets_[j + 1];
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            reverseOffsets_[i + 1] += reverseOffsets_[i];
+        }
+        reversePairs_.resize(neighbours_.size());
+        std::vector<std::size_t> fill(reverseOffsets_.begin(), reverseOffsets_.end() - 1);
+        for (std::size_t k = 0; k < neighbours_.size(); ++k) {
+            reversePairs_[fill[neighbours_[k]]++] = k;
+        }
     }
 
     referencePositions_.resize(n);
