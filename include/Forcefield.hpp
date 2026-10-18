@@ -3,7 +3,6 @@
 #include "NeighbourList.hpp"
 #include "System.hpp"
 
-
 class LennardJonesForceField {
 public:
     LennardJonesForceField(double epsilon, double sigma, double cut_off);
@@ -34,6 +33,13 @@ public:
     };
 
     // Set whether to use the deterministic force mode, which produces bitwise-identical forces for any thread count
+    // Mixed precision: positions, minimum image and force accumulation stay double, but the pair maths
+    // (r^2, the LJ terms, F/r) runs in float, so each SIMD instruction handles 4 pairs instead of 2.
+    // Applies to the default neighbour list path only
+    void setMixedPrecision(bool mixed) {
+        mixedPrecision_ = mixed;
+    };
+
     void setDeterministic(bool deterministic) {
         deterministic_ = deterministic;
     };
@@ -50,6 +56,7 @@ private:
     void checkCutOff(const System& system) const;
 
     double computeForcesDeterministic(System& system, const NeighbourList& neighbourList) const;
+    double computeForcesMixed(System& system, const NeighbourList& neighbourList) const;
 
     // One force array per thread for the neighbour list loop, summed at the end. Kept between calls to
     // avoid reallocating, which also means computeForces must not run concurrently on one force field
@@ -61,6 +68,7 @@ private:
     mutable double virial_ {0.0};
     mutable double insidePairs_ {0.0};
     bool deterministic_ {false};
+    bool mixedPrecision_ {false};
 
     double epsilon_;
     double sigma_;

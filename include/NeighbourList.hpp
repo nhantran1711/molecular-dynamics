@@ -7,12 +7,11 @@
 #include <span>
 #include <vector>
 
-// A neighbour list for efficient force computation. 
+// A neighbour list for efficient force computation.
 // Each particle has a list of its neighbours within a cutoff distance.
 class NeighbourList {
 public:
-    
-    // Construct a neighbour list with a given cutoff and skin distance. The skin distance is the extra distance beyond the cutoff that allows the list to remain valid for multiple timesteps without rebuilding. If reverseIndex is true, the list will also store the pairs in which each particle is the second particle, which is needed for deterministic forces. 
+    // Construct a neighbour list with a given cutoff and skin distance. The skin distance is the extra distance beyond the cutoff that allows the list to remain valid for multiple timesteps without rebuilding. If reverseIndex is true, the list will also store the pairs in which each particle is the second particle, which is needed for deterministic forces.
     NeighbourList(double cutOff, double skin, bool reverseIndex = false);
 
     // Rebuild only if a particle has moved more than skin / 2 since the last build. Returns true if rebuilt.
@@ -26,7 +25,7 @@ public:
     std::span<const std::size_t> neighboursOf(std::size_t i) const {
         return {neighbours_.data() + offsets_[i], offsets_[i + 1] - offsets_[i]};
     };
-    
+
     // Global index of particle i's first pair: its pairs are [firstPairOf(i), firstPairOf(i) + neighboursOf(i).size())
     std::size_t firstPairOf(std::size_t i) const {
         return offsets_[i];

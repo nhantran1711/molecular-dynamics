@@ -6,7 +6,7 @@
 #include <span>
 #include <vector>
 
-// A grid of cubic cells for efficient neighbour searching. 
+// A grid of cubic cells for efficient neighbour searching.
 // Each cell contains a list of the particles in it.
 class CellList {
 
