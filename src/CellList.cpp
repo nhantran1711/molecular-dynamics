@@ -2,12 +2,12 @@
 #include <algorithm>
 #include <cmath>
 
-CellList::CellList(double minCellSize) : minCellSize_(minCellSize) {}
+CellList::CellList(double minCellSize) : minCellSize_(minCellSize) {
+}
 
 // Bin every particle into its cell with a counting sort, which keeps each cell's particles contiguous in memory
 void CellList::build(const System& system) {
-    // Beyond half the box a particle could interact with two images of the same neighbour
-    const auto& particles = system.getParticles();
+    const std::size_t n = system.size();
     const double boxLength = system.getBoxLength();
 
     // Compute the number of cells along one side of the box, and the inverse cell size
@@ -18,12 +18,12 @@ void CellList::build(const System& system) {
     const double inverseCellSize = cellsPerSide_ / boxLength;
 
     // Resize the vectors to hold the cell indices and particle indices
-    particleCell_.resize(particles.size());
+    particleCell_.resize(n);
     cellStart_.assign(nCells + 1, 0);
-    cellParticles_.resize(particles.size());
+    cellParticles_.resize(n);
 
     // Find each particle's cell and count how many particles land in each cell
-    for (std::size_t i = 0; i < particles.size(); ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
 
         // Map the particle's position to a cell index in each dimension, clamping to ensure it stays within bounds
         std::array<int, 3> c {};
@@ -31,9 +31,9 @@ void CellList::build(const System& system) {
         // Use the inverse cell size to convert position to cell index, and clamp to ensure it stays within bounds
         for (int k = 0; k < 3; ++k) {
             // Clamp guards against a position of exactly boxLength after floating point wrapping
-            c[k] = std::min(static_cast<int>(particles[i].position[k] * inverseCellSize), cellsPerSide_ - 1);
+            c[k] = std::min(static_cast<int>(system.positionOf(i)[k] * inverseCellSize), cellsPerSide_ - 1);
         }
-        
+
         // Compute the linear cell index from the 3D cell coordinates and store it for the particle
         particleCell_[i] = (c[0] * cellsPerSide_ + c[1]) * cellsPerSide_ + c[2];
         ++cellStart_[particleCell_[i] + 1];
@@ -46,14 +46,14 @@ void CellList::build(const System& system) {
 
     // Scatter particle indices into their cell's slot
     std::vector<std::size_t> fill(cellStart_.begin(), cellStart_.end() - 1);
-    for (std::size_t i = 0; i < particles.size(); ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
         cellParticles_[fill[particleCell_[i]]++] = i;
     }
 }
 
 // The 3x3x3 block of cells around the given cell, wrapping across the periodic boundaries
 std::array<int, 27> CellList::neighbourCells(int cell) const {
-    
+
     // Convert the linear cell index to 3D coordinates (cx, cy, cz) in the grid of cells
     const int n = cellsPerSide_;
     const int cx = cell / (n * n);
