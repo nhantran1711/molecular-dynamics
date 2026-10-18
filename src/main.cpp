@@ -10,6 +10,10 @@
 #include <cstdlib>
 #include <string_view>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 // Main function for the molecular dynamics simulation
 int main(int argc, char** argv) {
 
@@ -61,8 +65,14 @@ int main(int argc, char** argv) {
     neighbourList.build(system);
     const double n = static_cast<double>(system.getParticles().size());
 
-    std::printf("N = %zu, L = %.4f, rho = %.4f, dt = %.4f, forces = %s\n", system.getParticles().size(), boxLength, density, dt,
-        useNeighbourList ? "neighbour list" : "all pairs");
+#ifdef _OPENMP
+    const int threads = omp_get_max_threads();
+#else
+    const int threads = 1;
+#endif
+
+    std::printf("N = %zu, L = %.4f, rho = %.4f, dt = %.4f, forces = %s, threads = %d\n", system.getParticles().size(), boxLength, density, dt,
+        useNeighbourList ? "neighbour list" : "all pairs", threads);
 
     // Equilibration: melt the lattice while rescaling velocities to hold the target temperature
     std::printf("\nEquilibration (%d steps, rescale every %d)\n", equilibrationSteps, rescaleEvery);
