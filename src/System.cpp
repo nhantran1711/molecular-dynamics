@@ -4,27 +4,17 @@
 
 // Constructor for the System class
 System::System(std::vector<Particle> particles, double boxLength): 
-    boxLength_(boxLength), particles_(std::move(particles)) {}
+    boxLength_(boxLength), inverseBoxLength_(1.0 / boxLength), particles_(std::move(particles)) {}
 
 
-// Using PBC, find the minimum image distance between two particles
-std::array<double, 3> System::minimumImageDistance(const std::array<double, 3>& ri, const std::array<double, 3>& rj) const {
-    std::array<double, 3> dr {};
-
-    for (int k = 0; k < 3; ++k) {
-        dr[k] = ri[k] - rj[k];
-
-        // PBC 
-        dr[k] -= boxLength_ * std::round(dr[k] / boxLength_);
+// Permute the particles into the given order
+void System::reorder(std::span<const std::size_t> order) {
+    std::vector<Particle> sorted;
+    sorted.reserve(particles_.size());
+    for (std::size_t old : order) {
+        sorted.push_back(particles_[old]);
     }
-    return dr;
-}
-
-// Wrap position of a particle back into the simulation box
-void System::wrapPosition(std::array<double, 3>& r) const {
-    for (int k = 0; k < 3; ++k) {
-        r[k] -= boxLength_ * std::floor(r[k] / boxLength_);
-    }
+    particles_ = std::move(sorted);
 }
 
 // Calculate the kinetic energy of the system
