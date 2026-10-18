@@ -17,6 +17,7 @@ add_executable(md_sim
     src/Forcefield.cpp
     src/Integrator.cpp
     src/Initialisation.cpp
+    src/Thermostat.cpp
 )
 
 target_include_directories(md_sim PRIVATE include)
