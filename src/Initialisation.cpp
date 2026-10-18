@@ -43,3 +43,39 @@ std::vector<Particle> createFCCLattice(int cellsPerSide, double latticeConstant)
     return particles;
 }
 
+// Draw Gaussian velocities, remove net momentum, then rescale to hit the target temperature exactly
+void initializeVelocities(System& system, double temperature, std::uint32_t seed) {
+    
+    // Get a reference to the particles in the system
+    auto& particles = system.getParticles();
+    std::mt19937 rng(seed);
+
+    // Draw Gaussian velocities for each particle and calculate the total momentum and mass
+    std::array<double, 3> momentum {0.0, 0.0, 0.0};
+    double totalMass = 0.0;
+
+    // Draw Gaussian velocities for each particle and calculate the total momentum and mass
+    for (auto& particle : particles) {
+        std::normal_distribution<double> dist(0.0, std::sqrt(temperature / particle.mass));
+        for (int k = 0; k < 3; ++k) {
+            particle.velocity[k] = dist(rng);
+            momentum[k] += particle.mass * particle.velocity[k];
+        }
+        totalMass += particle.mass;
+    }
+
+    // Remove centre-of-mass velocity so the system doesn't drift
+    for (auto& particle : particles) {
+        for (int k = 0; k < 3; ++k) {
+            particle.velocity[k] -= momentum[k] / totalMass;
+        }
+    }
+
+    // Rescale velocities to hit the target temperature exactly
+    double scale = std::sqrt(temperature / system.temperature());
+    for (auto& particle : particles) {
+        for (int k = 0; k < 3; ++k) {
+            particle.velocity[k] *= scale;
+        }
+    }
+}
