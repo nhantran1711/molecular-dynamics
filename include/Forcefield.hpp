@@ -7,6 +7,12 @@ class LennardJonesForceField {
 public:
     LennardJonesForceField(double epsilon, double sigma, double cut_off);
 
+    // Compute the forces on every particle and return the total potential energy
+    double computeForces(System& system) const;
+
+    double getCutOff() const {
+        return cut_off_;
+    };
 
 private:
     double epsilon_;
