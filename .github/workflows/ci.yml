@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libglfw3-dev libgl-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp glfw
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test md_sim
+        run: ./build/md_sim 5 --equil 200 --steps 500 --quiet
+
+  sanitizers:
+    name: Sanitizer (${{ matrix.sanitizer }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address+undefined, thread]
+    env:
+      CC: clang-18
+      CXX: clang++-18
+      OMP_NUM_THREADS: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang-18 libomp-18-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DMD_SANITIZE=${{ matrix.sanitizer == 'thread' && 'thread' || 'address,undefined' }}
+
+      - name: Build
+        run: cmake --build build -j 4 --target md_tests md_sim
+
+      # ThreadSanitizer doesn't understand OpenMP's own synchronisation on its own; LLVM's Archer tool
+      # (shipped with libomp) tells it, so only real races in this code are reported
+      - name: Unit tests
+        run: |
+          if [ "${{ matrix.sanitizer }}" = "thread" ]; then
+            export OMP_TOOL_LIBRARIES=/usr/lib/llvm-18/lib/libarcher.so
+            export TSAN_OPTIONS="ignore_noninstrumented_modules=1 halt_on_error=1"
+          fi
+          ctest --test-dir build --output-on-failure
+
+      - name: Smoke test md_sim
+        run: |
+          if [ "${{ matrix.sanitizer }}" = "thread" ]; then
+            export OMP_TOOL_LIBRARIES=/usr/lib/llvm-18/lib/libarcher.so
+            export TSAN_OPTIONS="ignore_noninstrumented_modules=1 halt_on_error=1"
+          fi
+          ./build/md_sim 5 --equil 100 --steps 200 --quiet
